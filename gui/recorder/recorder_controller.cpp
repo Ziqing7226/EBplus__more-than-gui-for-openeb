@@ -60,6 +60,15 @@ bool RecorderController::start(CameraController* controller, const QString& path
             return false;
         }
         written_events_ = 0;
+        // Recordings capture the complete device stream: enable the IMU
+        // (and DAVIS APS) side streams even if the user never ticked the
+        // Devices-panel checkboxes — a recording silently missing the IMU
+        // defeats offline analysis. The prior state is restored on stop().
+        imu_was_enabled_ = controller->imu_enabled();
+        aps_was_enabled_ = controller->aps_enabled();
+        if (!imu_was_enabled_) controller->set_imu_enabled(true);
+        const bool davis_aps = controller->source_capabilities().aps;
+        if (davis_aps && !aps_was_enabled_) controller->set_aps_enabled(true);
         auto writer = aedat4_writer_;  // in-flight batches outlive stop()
         controller->set_raw_tap([this, writer](const Metavision::EventCD* b,
                                                const Metavision::EventCD* e) {
@@ -206,6 +215,14 @@ void RecorderController::stop() {
             controller_->set_raw_tap(nullptr);
             controller_->set_imu_tap(nullptr);
             controller_->set_aps_tap(nullptr);
+            // Restore the user's side-stream panel state (the recording
+            // enabled them automatically).
+            if (!imu_was_enabled_) controller_->set_imu_enabled(false);
+            if (controller_->source_capabilities().aps && !aps_was_enabled_) {
+                controller_->set_aps_enabled(false);
+            }
+            imu_was_enabled_ = false;
+            aps_was_enabled_ = false;
         }
         if (aedat4_writer_) {
             aedat4_writer_->close();

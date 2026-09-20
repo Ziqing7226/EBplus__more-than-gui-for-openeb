@@ -58,6 +58,10 @@ private:
     /// stop() tears the recording down on the GUI thread.
     bool aedat4_mode_{false};
     std::shared_ptr<Aedat4Writer> aedat4_writer_;
+    /// Side-stream state before the recording auto-enabled them — restored
+    /// on stop() so a recording never permanently changes the user's panel.
+    bool imu_was_enabled_{false};
+    bool aps_was_enabled_{false};
     QString path_;
     QTimer timer_;           ///< Emits elapsed() once per second.
     QTimer flush_timer_;     ///< Calls I_EventsStream::get_latest_raw_data() to flush buffers.
