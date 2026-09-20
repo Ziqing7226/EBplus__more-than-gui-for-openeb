@@ -86,6 +86,7 @@ constexpr std::uint16_t DVS_FILTER_POLARITY_FLATTEN = 61;
 constexpr std::uint16_t APS_SIZE_COLUMNS = 0;
 constexpr std::uint16_t APS_SIZE_ROWS = 1;
 constexpr std::uint16_t APS_ORIENTATION_INFO = 2;
+constexpr std::uint16_t APS_COLOR_FILTER = 3;
 constexpr std::uint16_t APS_RUN = 4;
 constexpr std::uint16_t APS_WAIT_ON_TRANSFER_STALL = 5;
 constexpr std::uint16_t APS_HAS_GLOBAL_SHUTTER = 6;
@@ -610,7 +611,17 @@ void Device::usb_control_out_noblock(std::uint8_t request, std::uint16_t value,
 void Device::apply_auto_exposure(const davis::ApsFrame& frame) {
     // The decision law lives in the unit-tested pure helper (ported from the
     // reference computeAutomaticExposure); this method only programs it.
-    aec_exposure_us_ = auto_exposure_step(frame.image, aec_exposure_us_);
+    // The reference meters GRAYSCALE — "we only do auto-exposure on
+    // grayscale images" — metering a single channel of a color frame
+    // skews the exposure (measured: blue-only metering oscillated the
+    // exposure and flashed white frames on the DAVIS346 color).
+    cv::Mat gray;
+    if (frame.image.channels() == 3) {
+        cv::cvtColor(frame.image, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = frame.image;
+    }
+    aec_exposure_us_ = auto_exposure_step(gray, aec_exposure_us_);
     const auto ticks = exposure_ticks(aec_exposure_us_, adc_clock_);
     const std::uint8_t be[4] = {static_cast<std::uint8_t>(ticks >> 24),
                                 static_cast<std::uint8_t>(ticks >> 16),
@@ -732,7 +743,18 @@ void Device::configure_idle() {
     const auto aps_rows = static_cast<int>(spi_config_receive(MODULE_APS, APS_SIZE_ROWS));
     const auto aps_orientation = spi_config_receive(MODULE_APS, APS_ORIENTATION_INFO);
     aps_orientation_ = static_cast<int>(aps_orientation);
-    parser_.set_aps_config(chip_id, aps_columns, aps_rows, static_cast<int>(aps_orientation));
+    // Color filter arrangement (MONO=0, RGBG=1, GRGB=2, GBGR=3, BGRG=4):
+    // a color sensor reports its Bayer pattern here; MONO cameras report 0.
+    int color_filter = 0;
+    try {
+        color_filter = static_cast<int>(
+            spi_config_receive(MODULE_APS, APS_COLOR_FILTER) & 0xFFFF);
+    } catch (const std::exception&) {
+        color_filter = 0;  // Unreadable register — decode mono.
+    }
+    if (color_filter < 0 || color_filter > 4) color_filter = 0;
+    parser_.set_aps_config(chip_id, aps_columns, aps_rows,
+        static_cast<int>(aps_orientation), color_filter);
 
     // Shut the device down into a known idle state before configuring.
     spi_config_send(MODULE_DVS, DVS_RUN, false);
@@ -820,7 +842,11 @@ void Device::configure_idle() {
     spi_config_send(MODULE_IMU, IMU_ACCEL_DLPF, 1);
     spi_config_send(MODULE_IMU, IMU_GYRO_DLPF, 1);
     spi_config_send(MODULE_IMU, IMU_ACCEL_FULL_SCALE, 1); // ±4 g
-    spi_config_send(MODULE_IMU, IMU_GYRO_FULL_SCALE, 1);  // ±500 °/s
+    // ±2000 dps (code 3): fast hand motion exceeds ±500 dps and clipping
+    // breaks attitude closed paths (measured on MS000094: samples pinned
+    // at exactly 500.0 during the user's closed-path test). The in-band
+    // Scale Config word follows the register, keeping the decoder in sync.
+    spi_config_send(MODULE_IMU, IMU_GYRO_FULL_SCALE, 3);  // ±2000 °/s
 
     // External input detector/generator defaults.
     spi_config_send(MODULE_EXTERNAL_INPUT, EXTINPUT_DETECT_RISING_EDGES, false);

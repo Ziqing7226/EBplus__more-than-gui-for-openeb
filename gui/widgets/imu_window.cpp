@@ -10,7 +10,6 @@
 
 #include <QPainter>
 #include <QTimer>
-#include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
@@ -27,6 +26,14 @@ constexpr double kHalfX = 0.8, kHalfY = 1.2, kHalfZ = 0.5;
 struct Q4 {
     double w, x, y, z;
 };
+
+/// Quaternion product a * b.
+Q4 qmul(const Q4& a, const Q4& b) {
+    return {a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+            a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
+}
 
 /// Rotates (x, y, z) by q: v' = q * v * q*.
 void qrotate(const Q4& q, double& x, double& y, double& z) {
@@ -49,11 +56,8 @@ ImuWindow::ImuWindow(CameraController* controller, QWidget* parent)
     setAttribute(Qt::WA_DeleteOnClose);
     setMinimumSize(520, 620);
 
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(8, 8, 8, 8);
-    status_label_ = new QLabel(this);
-    layout->addWidget(status_label_);
-    layout->addStretch(1);  // the pose panel below is hand-painted
+    // Everything is hand-painted in paintEvent (pose canvas + status line +
+    // numeric readout) — no child widgets, no themed label backgrounds.
 
     // 30 Hz pull: drain new samples from the controller ring (thread-safe),
     // integrate the pose, repaint.
@@ -103,14 +107,14 @@ void ImuWindow::refresh() {
     }
 
     if (count == 0) {
-        status_label_->setText(
-            tr("Waiting for samples…\n(Stream runs only while the camera streams)"));
+        status_text_ =
+            tr("Waiting for samples…\n(Stream runs only while the camera streams)");
     } else if (!pose_.aligned()) {
-        status_label_->setText(tr("IMU: aligning (hold still)…"));
+        status_text_ = tr("IMU: aligning (hold still)…");
     } else {
-        status_label_->setText(tr("Samples: %1   Rate: %2 Hz")
+        status_text_ = tr("Samples: %1   Rate: %2 Hz")
                                    .arg(count)
-                                   .arg(smoothed_rate_, 5, 'f', 1));
+                                   .arg(smoothed_rate_, 5, 'f', 1);
     }
     update();
 }
@@ -120,7 +124,28 @@ void ImuWindow::draw_pose(QPainter& p, const QRectF& r) {
     p.setPen(QColor(70, 70, 78));
     p.drawRect(r);
 
-    const Q4 q{pose_.w(), pose_.x(), pose_.y(), pose_.z()};
+    // Status line: plain text in the canvas corner (no themed strip).
+    p.setPen(QColor(165, 165, 172));
+    p.drawText(r.adjusted(8, 6, -8, 0), Qt::AlignLeft | Qt::AlignTop,
+               status_text_);
+
+    // Drawn pose = q_canonical * q_default^-1 * q.
+    // q_canonical is the FIXED canonical camera attitude (upright, lens
+    // toward the viewer: body x → world X, y → world Z up, z → world -Y).
+    // At startup and after every completed re-upright (q == q_default) the
+    // drawn pose reduces EXACTLY to q_canonical, so the picture is THE
+    // canonical default pose — z toward the viewer, y up, x left —
+    // identical at every window-open and every re-upright, whatever the
+    // physical mounting happened to be at alignment. Motion composes on
+    // the right (body-frame), so the on-screen rotation senses are the
+    // ones pinned by the hardware axis-rotation tests.
+    static constexpr Q4 q_canonical{0.7071067811865476, 0.7071067811865476,
+                                    0.0, 0.0};
+    const Q4 qd{pose_.default_w(), pose_.default_x(), pose_.default_y(),
+                pose_.default_z()};
+    const Q4 q = qmul(q_canonical,
+                      qmul(Q4{qd.w, -qd.x, -qd.y, -qd.z},
+                           Q4{pose_.w(), pose_.x(), pose_.y(), pose_.z()}));
 
     // Cuboid corners (body frame), rotated into the world frame.
     double corners[8][3];
@@ -196,7 +221,12 @@ void ImuWindow::draw_pose(QPainter& p, const QRectF& r) {
     }
 
     // Body axes triad from the cuboid center (X red, Y green, Z blue).
-    const double axes[3][3] = {{2.0, 0, 0}, {0, 2.0, 0}, {0, 0, 2.0}};
+    // The default pose is THE unique canonical attitude, defined relative
+    // to the world as z out of the lens toward the viewer, y up, x LEFT —
+    // so the X arrow is drawn along -x_body and the default pose shows X
+    // on the left, matching the inivation front-view diagram. The arrow
+    // stays on that body axis through every motion.
+    const double axes[3][3] = {{-1.4, 0, 0}, {0, 1.4, 0}, {0, 0, 1.4}};
     const QColor axis_colors[3] = {QColor(255, 80, 80), QColor(80, 220, 120),
                                    QColor(110, 160, 255)};
     const char* axis_labels[3] = {"X", "Y", "Z"};
@@ -218,10 +248,11 @@ void ImuWindow::draw_pose(QPainter& p, const QRectF& r) {
                    tr("Aligning to gravity (hold still)…"));
     }
 
-    // Numeric readout (latest sample).
+    // Numeric readout (latest sample), bottom-left so it cannot collide
+    // with the status line.
     const auto latest = controller_->latest_imu();
     p.setPen(QColor(200, 200, 205));
-    p.drawText(r.adjusted(8, 6, -8, 0), Qt::AlignLeft | Qt::AlignTop,
+    p.drawText(r.adjusted(8, 0, -8, -6), Qt::AlignLeft | Qt::AlignBottom,
                QStringLiteral("Acc %1, %2, %3 g   Gyro %4, %5, %6 dps   %7 °C")
                    .arg(latest.accel_x, 0, 'f', 2)
                    .arg(latest.accel_y, 0, 'f', 2)
@@ -236,11 +267,8 @@ void ImuWindow::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.fillRect(rect(), QColor(12, 12, 14));
 
-    // The status label occupies the top strip (layout-managed); everything
-    // below is hand-painted.
-    const qreal paint_top = status_label_->geometry().bottom() + 6.0;
-    const QRectF pose(rect().left() + 8, paint_top, rect().width() - 16,
-                      std::max(120.0, rect().bottom() - 10.0 - paint_top));
+    const QRectF pose(rect().left() + 8, rect().top() + 8, rect().width() - 16,
+                      rect().height() - 16);
     draw_pose(p, pose);
 }
 

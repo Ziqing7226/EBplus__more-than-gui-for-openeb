@@ -141,8 +141,10 @@ void build_frame_packet(const davis::ApsFrame& f, std::vector<std::uint8_t>& out
     const std::size_t vtable_pos = 56;
     const std::size_t vector_pos = 88;
     const std::uint8_t* pix = f.image.data;
+    const int channels = f.image.channels();
     const std::size_t npix = static_cast<std::size_t>(f.image.rows) *
-                             static_cast<std::size_t>(f.image.cols);
+                             static_cast<std::size_t>(f.image.cols) *
+                             static_cast<std::size_t>(channels);
     out.assign(vector_pos + 4 + npix, 0);
 
     put_u32(out, 0, 8);                    // root → table@8
@@ -152,7 +154,7 @@ void build_frame_packet(const davis::ApsFrame& f, std::vector<std::uint8_t>& out
     std::memcpy(out.data() + 24, &f.t, 8);           // VT6 tsSOF
     std::memcpy(out.data() + 32, &f.t, 8);           // VT8 tsEOF
     put_u32(out, 40, static_cast<std::uint32_t>(vector_pos - 40));   // VT24 → pixels
-    out[44] = 0;                                     // VT14 format OPENCV_8U_C1
+    out[44] = channels == 3 ? 2 : 0;  // VT14: OPENCV_8U_C1 / OPENCV_8U_C3
     const std::int16_t w = static_cast<std::int16_t>(f.image.cols);
     const std::int16_t h = static_cast<std::int16_t>(f.image.rows);
     std::memcpy(out.data() + 46, &w, 2);             // VT16 sizeX
@@ -361,7 +363,10 @@ void Aedat4Writer::write_imu(const davis::ImuSample& s) {
 }
 
 void Aedat4Writer::write_aps(const davis::ApsFrame& f) {
-    if (f.image.empty() || f.image.type() != CV_8UC1) return;
+    if (f.image.empty() ||
+        (f.image.type() != CV_8UC1 && f.image.type() != CV_8UC3)) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(mtx_);
     if (!file_) return;
 

@@ -77,7 +77,8 @@ private:
 
     // DVXplorer: X/Y tags carry Y first; BMI160 temperature formula;
     // accel range code at Scale Config bits [4:3].
-    ImuDecoder imu_{true, true, 3, 0x07};
+    ImuDecoder imu_{true, true, 3, 0x07, false,
+                    ImuDecoder::AxisConvention::Dvxplorer};
 
     std::vector<Metavision::EventCD> batch_;
 };

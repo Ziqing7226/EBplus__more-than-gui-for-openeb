@@ -904,7 +904,7 @@ TEST(DvxImu, DecodesFullSampleWithSwappedTagsAndBmi160Temp) {
     EXPECT_FLOAT_EQ(s.accel_x, -1.0F / 8192.0F);
     EXPECT_FLOAT_EQ(s.accel_z, 0.25F);
     EXPECT_FLOAT_EQ(s.temperature, 400.0F / 512.0F + 23.0F);
-    EXPECT_FLOAT_EQ(s.gyro_y, 512.0F / 65.536F);
+    EXPECT_FLOAT_EQ(s.gyro_y, -512.0F / 65.536F);  // yaw sign fix
     EXPECT_FLOAT_EQ(s.gyro_x, 100.0F / 65.536F);
     EXPECT_FLOAT_EQ(s.gyro_z, -100.0F / 65.536F);
 }
@@ -914,14 +914,16 @@ TEST(DavisImu, DecodesFullSampleWithStraightTagsAndDavistemp) {
     std::vector<Metavision::EventCD> dropped;
     feed(parser, {special_word(1), ts_word(500)}, dropped);
 
+    // Reference word layout: type [7:5], accel [3:2], gyro [1:0].
+    // accel code 3 = ±16 g, gyro code 0.
     const std::uint16_t scale =
-        static_cast<std::uint16_t>(0x5000 | (3 << 8) | (7 << 5) | (3 << 2) | 0);  // DAVIS layout  // ±16 g, ±2000 °/s
+        static_cast<std::uint16_t>(0x5000 | (3 << 8) | (7 << 5) | (3 << 2) | 0);
     std::array<std::uint8_t, 14> bytes = {
         0x04, 0x00,  // tag1 = accelX raw +1024 → 1024/2048 g
         0x00, 0x01,  // tag3 = accelY raw +1
         0x00, 0x00,  // accelZ raw 0
         0x0A, 0x28,  // temperature raw 2600 → 2600/340 + 35 (BMI160 model)
-        0x10, 0x00,  // tag9  = gyroX raw +4096 → 4096/16.384 °/s
+        0x10, 0x00,  // tag9  = gyroX raw +4096 → 4096/131.072 °/s
         0x00, 0x00,  // tag11 = gyroY
         0x00, 0x00,  // gyroZ
     };
@@ -929,13 +931,80 @@ TEST(DavisImu, DecodesFullSampleWithStraightTagsAndDavistemp) {
 
     EXPECT_TRUE(s.valid);
     EXPECT_EQ(s.t, 400);
-    EXPECT_FLOAT_EQ(s.accel_x, 1024.0F / 2048.0F);
+    // The DAVIS convention (IMU remounted 180 deg about the camera's Y)
+    // negates accel_x and gyro_x; accel_y/gyro_y pass through.
+    EXPECT_FLOAT_EQ(s.accel_x, -1024.0F / 2048.0F);
     EXPECT_FLOAT_EQ(s.accel_y, 1.0F / 2048.0F);
     EXPECT_FLOAT_EQ(s.accel_z, 0.0F);
     EXPECT_FLOAT_EQ(s.temperature, 2600.0F / 340.0F + 35.0F);
-    EXPECT_FLOAT_EQ(s.gyro_x, 4096.0F / 16.384F);
+    // InvenSense codes ASCEND with range: code 0 = ±250 dps (131.072
+    // LSB/dps) — the dv-processing davis_parser.hpp formula.
+    EXPECT_FLOAT_EQ(s.gyro_x, -4096.0F / 131.072F);
     EXPECT_FLOAT_EQ(s.gyro_y, 0.0F);
     EXPECT_FLOAT_EQ(s.gyro_z, 0.0F);
+}
+
+TEST(DavisImu, WireUsesYRemountedFrame) {
+    // Pins the DAVIS-family convention: the IMU frame sits rotated 180 deg
+    // about the camera's Y (the user measured all three rotation senses
+    // inverted on a DAVIS346 under the DVXplorer convention — the exact
+    // complement, i.e. a proper remount, consistent with the different IMU
+    // chip: DAVIS346 = MPU-6500, DVXplorer = BMI160). accel_x/accel_z/
+    // gyro_x/gyro_z negate; accel_y/gyro_y pass through. The remount is a
+    // PROPER rotation: accel and gyro stay mutually consistent.
+    gui::davis::Parser parser(346, 260, false);
+    std::vector<Metavision::EventCD> dropped;
+    feed(parser, {special_word(1), ts_word(100)}, dropped);
+
+    // DAVIS bit layout: type [7:5], accel [3:2], gyro [1:0] (the word's
+    // code nibble must be 3 = Scale Config).
+    // type = temp|gyro|accel (7), accel ±4 g (1), gyro code 1 = ±500 dps
+    // (65.536 LSB/dps, ascending InvenSense encoding).
+    const std::uint16_t scale = static_cast<std::uint16_t>(
+        0x5000 | (3 << 8) | (7 << 5) | (1 << 2) | 1);
+    std::array<std::uint8_t, 14> bytes = {
+        0x01, 0x00,  // accelX raw +256 → −256/8192 g (remount)
+        0x00, 0x00,  // accelY
+        0x00, 0x00,  // accelZ
+        0x00, 0x00,  // temperature
+        0x00, 0x64,  // gyroX raw +100 → −100/65.536 dps (remount)
+        0x00, 0x32,  // gyroY raw +50 → +50/65.536 dps (pass-through)
+        0x00, 0x32,  // gyroZ raw +50 → −50/65.536 dps (remount)
+    };
+    const auto s = feed_imu_sample(parser, scale, bytes, 200);
+    ASSERT_TRUE(s.valid);
+    EXPECT_FLOAT_EQ(s.accel_x, -256.0F / 8192.0F);
+    EXPECT_FLOAT_EQ(s.gyro_x, -100.0F / 65.536F);
+    EXPECT_FLOAT_EQ(s.gyro_y, 50.0F / 65.536F);
+    EXPECT_FLOAT_EQ(s.gyro_z, -50.0F / 65.536F);
+}
+
+TEST(DavisImu, InvenSenseGyroScaleMatchesReference) {
+    // dv-processing davis_parser.hpp: gyroScale = 65536 / (500 * (1 << code))
+    // — codes ASCEND with range: 0=±250, 1=±500, 2=±1000, 3=±2000 dps.
+    // The recorded gyro trajectory of a real closed path only closes when
+    // this (ascending) layout is used — the inverted reading scaled every
+    // sample by exactly 2x at the ±1000 setting and broke loop closure.
+    gui::davis::Parser parser(346, 260, false);
+    std::vector<Metavision::EventCD> dropped;
+    feed(parser, {special_word(1), ts_word(100)}, dropped);
+
+    // type = temp|gyro|accel (7), accel ±16 g (3), gyro code 2 at the
+    // reference bits [1:0]. The FIELD CALIBRATION divisor at code 2 is
+    // 16.384 LSB/dps (half the descending denominator 250*4).
+    const std::uint16_t scale = imu_scale_word(7, 3, 2);
+    std::array<std::uint8_t, 14> bytes = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,             // accel xyz
+        0x0A, 0x28,                                     // temperature
+        0x0C, 0xCC,                                     // gyroX raw +3276 → 3276/32.768 = 100 dps
+        0x00, 0x00, 0x00, 0x00,                         // gyroY/Z
+    };
+    const auto s = feed_imu_sample(parser, scale, bytes, 200);
+    // InvenSense codes ASCEND: code 2 = ±1000 dps → 32.768 LSB/dps;
+    // 3276 / 32.768 = 99.9756 (dv-processing davis_parser.hpp formula).
+    // The Davis remount negates gyro_x.
+    EXPECT_NEAR(s.gyro_x, -100.0F, 0.1) << "gx=" << s.gyro_x << " gy=" << s.gyro_y
+        << " gz=" << s.gyro_z << " t=" << s.temperature << " ax=" << s.accel_x;
 }
 
 TEST(DavisImu, InvenSenseTemperatureFormula) {
@@ -1108,9 +1177,8 @@ TEST(DavisAps, Davis240GainShift) {
 
 TEST(DavisImu, ScaleConfigUsesDavisBitLayout) {
     // The DAVIS Scale Config word packs the accel range at bits [3:2]
-    // (DVXplorer packs it at [4:3]) — the reference reads `data >> 2` here.
-    // type = accel|gyro|temp (7), accel code 1 = +-4 g (8192 LSB/g),
-    // gyro code 0 = +-2000 deg/s (16.4 LSB/deg/s).
+    // (DVXplorer packs it at [4:3]) — the reference reads `data >> 2`.
+    // type = accel only (4), accel code 1 = +-4 g (8192 LSB/g).
     gui::davis::Parser parser(346, 260, false);
     std::vector<Metavision::EventCD> dropped;
     feed(parser, {special_word(1), ts_word(100)}, dropped);
@@ -1136,7 +1204,7 @@ TEST(DavisImu, ScaleConfigUsesDavisBitLayout) {
 
     // Type = 4 (accel only): after accel_z the count jumps +8 → complete.
     ASSERT_TRUE(got.valid);
-    EXPECT_FLOAT_EQ(got.accel_x, 1.0F);
+    EXPECT_FLOAT_EQ(got.accel_x, -1.0F);  // Davis remount negates accel_x
     EXPECT_FLOAT_EQ(got.accel_y, 0.0F);
 }
 
@@ -1356,11 +1424,11 @@ TEST(ImuPoseFilter, ClosedMotionReturnsToStart) {
         }
     };
 
-    run(12000, 0.0);      // still: alignment instant, bias converges and the
-                         // 10 s warm-up ends before the motion starts
+    run(12000, 0.0);      // still: alignment instant, bias converges before
+                         // the motion starts
     run(1000, 30.0);      // +30 deg/s for 1 s
     run(1000, -30.0);     // and back to the start attitude
-    run(1000, 0.0);       // settle
+    run(2500, 0.0);       // settle: stillness re-upright completes
 
     const double err = up_angle_deg(pose, q_true.x, q_true.y, q_true.z, q_true.w);
     EXPECT_LT(err, 3.0) << "closed motion residual " << err << " deg";
@@ -1589,30 +1657,127 @@ TEST(ImuPoseFilter, SlowPanDoesNotCorruptTheBias) {
         q_true = Q{std::cos(ang / 2), ax / an * std::sin(ang / 2),
                    ay / an * std::sin(ang / 2), 0};
     }
+    const Q q_default = q_true;  // the alignment attitude = the default pose
     // 10 s of slow pan at 5 deg/s (50 deg total), physically consistent
     // accel, then 2 s of rest — well short of the 3 s park re-open.
     std::int64_t t = 12000000;
     const double rate = 5.0;
-    for (int i = 0; i < 12000; ++i, t += 1000) {
-        const double apply = (i < 10000) ? rate : 0.0;
-        const double norm = std::abs(apply) * M_PI / 180.0;
-        if (norm > 1e-9) {
-            const double half = 1e-3 * norm / 2.0;
-            q_true = qnorm(qmul(q_true, Q{std::cos(half), 0, std::sin(half), 0}));
-        }
+    for (int i = 0; i < 10000; ++i, t += 1000) {
+        const double norm = std::abs(rate) * M_PI / 180.0;
+        const double half = 1e-3 * norm / 2.0;
+        q_true = qnorm(qmul(q_true, Q{std::cos(half), 0, std::sin(half), 0}));
         double ux, uy, uz;
         inv_rot(q_true, 0, 0, 1, &ux, &uy, &uz);
         pose.update(make_imu(t, static_cast<float>(ux), static_cast<float>(uy),
                              static_cast<float>(uz), bx,
-                             static_cast<float>(apply + by), bz));
+                             static_cast<float>(rate + by), bz));
     }
-    EXPECT_DOUBLE_EQ(pose.bias_x_dps(), frozen_x);
-    EXPECT_DOUBLE_EQ(pose.bias_y_dps(), frozen_y);
-    EXPECT_DOUBLE_EQ(pose.bias_z_dps(), frozen_z);
-    // Tilt stays tracked throughout (the 5 deg/s pan is below the tilt
-    // correction's 10 deg/s rest gate, so gravity re-anchors roll/pitch).
-    const double err = up_angle_deg(pose, q_true.x, q_true.y, q_true.z, q_true.w);
-    EXPECT_LT(err, 3.0) << "slow-pan tilt residual " << err << " deg";
+    // A 5 deg/s pan held SUSTAINED is bias by definition: the estimate
+    // absorbs it (bias_y → 5 + by) and the corrected rate vanishes, so the
+    // display stops following the pan.
+    EXPECT_NEAR(pose.bias_y_dps(), rate + by, 0.3)
+        << "sustained slow-pan rate was not absorbed: " << pose.bias_y_dps();
+    for (int i = 0; i < 3500; ++i, t += 1000) {
+        double ux, uy, uz;
+        inv_rot(q_true, 0, 0, 1, &ux, &uy, &uz);
+        pose.update(make_imu(t, static_cast<float>(ux), static_cast<float>(uy),
+                             static_cast<float>(uz), bx,
+                             static_cast<float>(by), bz));
+    }
+    // At the stop the sustain re-arms (1.5 s), the envelope reads only the
+    // noise, so the bias re-adapts downward, stillness opens, and the
+    // display re-uprights to the default pose (静止 = 正).
+    EXPECT_NEAR(pose.bias_y_dps(), by, 0.8)  // exponential tail, tau 1 s
+        << "bias did not re-adapt at the stop: " << pose.bias_y_dps();
+    const auto qangle_deg = [](const gui::davis::ImuPose& p, Q b) {
+        const double d = std::fabs(p.w() * b.w + p.x() * b.x + p.y() * b.y +
+                                   p.z() * b.z);
+        return 2.0 * std::acos(std::clamp(d, -1.0, 1.0)) * 180.0 / M_PI;
+    };
+    const double dev = qangle_deg(pose, q_default);
+    EXPECT_LT(dev, 5.0) << "stillness did not re-upright: " << dev << " deg";
+}
+
+TEST(ImuPoseFilter, ReUprightsToTheDefaultPoseAtRest) {
+    // The re-upright target is the UNIQUE default pose (the alignment
+    // attitude), INCLUDING the heading the accelerometer cannot see. After
+    // a real 40 deg/s spin (above the rest gate, so the filter stays
+    // gyro-pure) leaves the camera 40 deg off heading, a rest period pulls
+    // the displayed attitude back onto the default pose (rate-capped at
+    // 10 deg/s) while the physical camera stays where it is — the
+    // documented display convention (dv-style slow re-upright, one fixed
+    // default pose).
+    struct Q { double w, x, y, z; };
+    const auto qmul = [](Q a, Q b) {
+        return Q{a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+                 a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                 a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                 a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
+    };
+    const auto qnorm = [](Q q) {
+        const double n = std::sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
+        return Q{q.w / n, q.x / n, q.y / n, q.z / n};
+    };
+    const auto inv_rot = [&](Q q, double vx, double vy, double vz,
+                             double* ox, double* oy, double* oz) {
+        const Q i{q.w, -q.x, -q.y, -q.z};
+        const double tx = 2.0 * (i.y * vz - i.z * vy);
+        const double ty = 2.0 * (i.z * vx - i.x * vz);
+        const double tz = 2.0 * (i.x * vy - i.y * vx);
+        *ox = vx + i.w * tx + (i.y * tz - i.z * ty);
+        *oy = vy + i.w * ty + (i.z * tx - i.x * tz);
+        *oz = vz + i.w * tz + (i.x * ty - i.y * tx);
+    };
+    const auto qangle_deg = [](Q a, Q b) {
+        const double d = std::abs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
+        return 2.0 * std::acos(std::clamp(d, -1.0, 1.0)) * 180.0 / M_PI;
+    };
+    const auto pose_q = [](const gui::davis::ImuPose& p) {
+        return Q{p.w(), p.x(), p.y(), p.z()};
+    };
+
+    gui::davis::ImuPose pose;
+    for (int i = 0; i < 12000; ++i) {  // align + warm-up over
+        pose.update(make_imu(1000LL * i, -0.93F, 0.20F, -0.09F, 0, 0, 0));
+    }
+    ASSERT_TRUE(pose.aligned());
+    const Q q_default = pose_q(pose);
+    Q q_true = q_default;
+
+    // Spin the TRUE attitude 40 deg about the WORLD vertical in 1 s; the
+    // body rates are the world rate expressed in the (moving) body frame
+    // (deg/s — the filter's gyro unit) and the accel reports the consistent
+    // gravity direction.
+    std::int64_t t = 12000000;
+    const double half = (40.0 * M_PI / 180.0) / 1000.0 / 2.0;
+    for (int i = 0; i < 1000; ++i, t += 1000) {
+        q_true = qnorm(qmul(Q{std::cos(half), 0, 0, std::sin(half)}, q_true));
+        double bx, by, bz, ux, uy, uz;
+        inv_rot(q_true, 0, 0, 40.0, &bx, &by, &bz);
+        inv_rot(q_true, 0, 0, 1, &ux, &uy, &uz);
+        pose.update(make_imu(t, static_cast<float>(ux), static_cast<float>(uy),
+                             static_cast<float>(uz), static_cast<float>(bx),
+                             static_cast<float>(by), static_cast<float>(bz)));
+    }
+    // Pure gyro during the motion: the pose tracks the physical attitude.
+    EXPECT_LT(qangle_deg(pose_q(pose), q_true), 5.0);
+
+    // 10 s at rest physically unchanged: the pull slews the display back to
+    // the default pose (40 deg at the 10 deg/s cap ≈ 4 s + exponential tail).
+    for (int i = 0; i < 10000; ++i, t += 1000) {
+        double ux, uy, uz;
+        inv_rot(q_true, 0, 0, 1, &ux, &uy, &uz);
+        pose.update(make_imu(t, static_cast<float>(ux), static_cast<float>(uy),
+                             static_cast<float>(uz), 0, 0, 0));
+    }
+    const double to_default = qangle_deg(pose_q(pose), q_default);
+    const double to_physical = qangle_deg(pose_q(pose), q_true);
+    // The re-upright ends at ZERO residual (the sub-degree snap parks the
+    // attitude exactly on the default pose).
+    EXPECT_LT(to_default, 0.1) << "re-upright residual " << to_default << " deg";
+    EXPECT_GT(to_physical, 20.0)
+        << "the display must NOT follow the physical camera back — the "
+           "default pose is the unique re-upright target";
 }
 
 TEST(ImuPoseFilter, ResetClearsState) {

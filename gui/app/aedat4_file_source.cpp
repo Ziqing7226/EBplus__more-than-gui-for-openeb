@@ -402,12 +402,15 @@ void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn)
     // sizeX=VT16, sizeY=VT18, posX=VT20, posY=VT22, pixels=VT24,
     // exposure=VT26, source=VT28.
     const std::int64_t ts = fb.scalar<std::int64_t>(table, 4, 0);
+    const std::int32_t format = fb.scalar<std::int32_t>(table, 14, 0);
+    const int channels = (format == 2) ? 3 : 1;  // OPENCV_8U_C3 / C1
     const std::int16_t w = fb.scalar<std::int16_t>(table, 16, 0);
     const std::int16_t h = fb.scalar<std::int16_t>(table, 18, 0);
     const std::size_t vec = fb.vector(table, 24);
     if (vec == 0 || w <= 0 || h <= 0 || !fb.valid(vec, 4)) return;
     const std::uint32_t count = fb.u32(vec);
-    if (count != static_cast<std::uint32_t>(w) * static_cast<std::uint32_t>(h) ||
+    if (count != static_cast<std::uint32_t>(w) * static_cast<std::uint32_t>(h) *
+                     static_cast<std::uint32_t>(channels) ||
         (pn - vec - 4) < count) {
         return;
     }
@@ -419,7 +422,7 @@ void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn)
     frame.t = ts;
     frame.width = w;
     frame.height = h;
-    frame.image = cv::Mat(h, w, CV_8UC1);
+    frame.image = cv::Mat(h, w, channels == 3 ? CV_8UC3 : CV_8UC1);
     std::memcpy(frame.image.data, pd + 4 + vec + 4, count);
     frame.valid = true;
     aps_sink_(frame);

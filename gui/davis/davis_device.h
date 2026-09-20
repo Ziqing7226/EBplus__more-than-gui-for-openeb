@@ -108,6 +108,12 @@ public:
 
     /// Starts event streaming (data transfers + run switches + timestamp
     /// reset handshake; blocks up to ~1 s waiting for the reset marker).
+    /// Auto-exposure control (diagnostics and the APS panel toggle).
+    void set_auto_exposure(bool on) { auto_exposure_ = on; }
+    [[nodiscard]] bool auto_exposure() const { return auto_exposure_; }
+    /// The current AEC exposure estimate (µs) — diagnostics.
+    [[nodiscard]] double aec_exposure_us() const { return aec_exposure_us_; }
+
     void start();
     /// Stops event streaming; the camera returns to the configured-idle state.
     void stop();
@@ -133,6 +139,13 @@ public:
     /// for verifying that parameter writes actually landed on the camera.
     [[nodiscard]] std::uint16_t read_bias_register(std::uint16_t address) {
         return static_cast<std::uint16_t>(spi_config_receive(5, address) & 0xFFFF);
+    }
+    /// @brief Raw SPI read of an arbitrary module register — diagnostics
+    /// (register write verification). Safe while streaming (control
+    /// transfers run on the libusb thread).
+    [[nodiscard]] std::uint32_t read_module_register(std::uint8_t module,
+                                                     std::uint16_t address) {
+        return spi_config_receive(module, address);
     }
 
 private:

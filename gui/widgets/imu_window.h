@@ -12,9 +12,9 @@
 #define GUI_WIDGETS_IMU_WINDOW_H
 
 #include <QElapsedTimer>
+#include <QString>
 
 #include <limits>
-#include <QLabel>
 #include <QWidget>
 
 #include "davis/imu_pose.h"
@@ -47,7 +47,8 @@ private:
 
     CameraController* controller_;
     QTimer* timer_;
-    QLabel* status_label_;
+    /// Status line, drawn inside the pose canvas (no themed label strip).
+    QString status_text_;
 
     /// Camera attitude: gravity-aligned initialisation + gyro integration
     /// with gravity correction and a stationary-gated gyro-bias estimate

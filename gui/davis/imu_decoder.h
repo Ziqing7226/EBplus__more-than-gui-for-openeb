@@ -10,11 +10,34 @@
 // on the IMU chip family. Reference flip controls are not exposed by this
 // port, so no flip conversion is applied (the reference skips it too when
 // flip == flip-control).
+//
+// Coordinate system (docs.inivation.com hardware-advanced-usage/imu.html):
+// the camera frame is X right, Y up, Z toward the lens viewed from the BACK,
+// the units are g and dps — and the wire convention is PER FAMILY (the
+// cameras carry different IMU chips: DAVIS346 = InvenSense MPU-6500,
+// DVXplorer = Bosch BMI160), each pinned by the hardware axis-rotation
+// test on the real camera:
+//  - DVXplorer: negate gyro_y, everything else passes through (a
+//    reflection — three rounds of sign builds jointly admitted exactly
+//    this solution).
+//  - DAVIS family: all three rotation senses read inverted under the DVX
+//    convention — the exact complement, i.e. the IMU frame sits rotated
+//    180 deg about the camera's Y. That is a PROPER rotation (a rigid
+//    remount, not a mirror): accel_x/accel_z/gyro_x/gyro_z negate and the
+//    accel stays consistent with the gyro.
+// The inivation gyroscope-convention sentence ("counter-clockwise along
+// the increasing axis, which does not follow the right-hand rule") is a
+// diagram-reading note, not a numeric transform.
 
 #ifndef GUI_DAVIS_IMU_DECODER_H
 #define GUI_DAVIS_IMU_DECODER_H
 
 #include <cstdint>
+
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdio>
 
 #include "imu_types.h"
 
@@ -28,9 +51,26 @@ public:
     ///        6500/9250: raw/333.87 + 21, otherwise raw/340 + 35).
     ///        @param accel_shift 3 for DVXplorer (accel range code at
     ///        Scale Config bits [4:3]) and 2 for DAVIS (bits [3:2]).
-    ImuDecoder(bool swap_xy, bool bmi160_temp, int accel_shift, int gyro_mask)
+    /// @param invenSense_gyro selects the gyro range-code semantics of the
+    /// scale-config word: inivation/InvenSense (DAVIS) codes ascend with
+    /// range (0=±250 … 3=±2000 dps, dv-processing davis_parser.hpp);
+    /// BMI160 (DVXplorer) codes descend (0=±2000 … 4=±125 dps).
+    /// @param invenSense_gyro selects the gyro range-code encoding: the
+    /// DAVIS/InvenSense layout codes ASCEND with range (0=±250 … 3=±2000
+    /// dps, dv-processing davis_parser.hpp) and the register
+    /// IMU_GYRO_FULL_SCALE uses the same encoding; the DVXplorer BMI160
+    /// codes DESCEND (0=±2000 … 4=±125 dps).
+    /// Per-family wire convention, pinned on hardware (see the header).
+    enum class AxisConvention {
+        Dvxplorer,  ///< negate gyro_y only.
+        Davis,      ///< IMU rotated 180 deg about the camera's Y: negate
+                    ///< accel_x/accel_z/gyro_x/gyro_z (a proper remount).
+    };
+    ImuDecoder(bool swap_xy, bool bmi160_temp, int accel_shift, int gyro_mask,
+               bool invenSense_gyro, AxisConvention convention)
         : swap_xy_(swap_xy), bmi160_temp_(bmi160_temp), accel_shift_(accel_shift),
-          gyro_mask_(gyro_mask) {}
+          gyro_mask_(gyro_mask), invenSense_gyro_(invenSense_gyro),
+          convention_(convention) {}
 
     void set_model(ImuModel model) { model_ = model; }
     void set_sink(const ImuSink& sink) { sink_ = sink; }
@@ -47,12 +87,28 @@ public:
     /// [5:3] accel range (0=±2 g … 3=±16 g), [2:0] gyro range (0=±2000 …
     /// 4=±125 °/s, descending).
     void scale_config(std::uint16_t data) {
+        // EBPLUS_IMU_TRACE=1 prints every Scale Config word and the decoded
+        // codes — field diagnostics for scale/word-layout mismatches.
+        if (std::getenv("EBPLUS_IMU_TRACE") != nullptr) {
+            std::fprintf(stderr,
+                "[imu] scale word 0x%03X: accel code %d, gyro code %d, type %d\n",
+                data, (data >> accel_shift_) & 0x03,
+                data & gyro_mask_, (data >> 5) & 0x07);
+        }
         accel_scale_ = 65536.0F / static_cast<float>(4 * (1 << ((data >> accel_shift_) & 0x03)));
-        // Range codes are 0..4 (descending); clamp corrupted words to 4 —
-        // a negative shift would be undefined behavior.
-        const auto gyro_range =
-            static_cast<int>(data & gyro_mask_) > 4 ? 4 : static_cast<int>(data & gyro_mask_);
-        gyro_scale_ = 65536.0F / static_cast<float>(250 * (1 << (4 - gyro_range)));
+        const int gyro_code = static_cast<int>(data & gyro_mask_);
+        if (invenSense_gyro_) {
+            // InvenSense (DAVIS): codes ASCEND with range (register
+            // IMU_GYRO_FULL_SCALE uses the same encoding) —
+            // 0 - ±250 dps - 131 LSB/°/s … 3 - ±2000 dps - 16.4 LSB/°/s
+            // (dv-processing davis_parser.hpp calculateIMUGyroScale).
+            gyro_scale_ = 65536.0F / static_cast<float>(500 * (1 << gyro_code));
+        } else {
+            // BMI160 (DVXplorer): codes DESCEND —
+            // 0 - ±2000 dps … 4 - ±125 dps - 262 LSB/°/s.
+            const auto clamped = std::min<int>(gyro_code, 4);
+            gyro_scale_ = 65536.0F / static_cast<float>(250 * (1 << (4 - clamped)));
+        }
         type_ = static_cast<std::uint8_t>(data >> 5) & 0x07;
         if (type_ & 0x04) {
             count_ = 0;  // Accelerometer first.
@@ -68,6 +124,7 @@ public:
     /// One data byte (code 5, misc8 code 0): the high half at even sequence
     /// positions, completing the big-endian int16 at odd positions.
     void data_byte(std::uint8_t byte) {
+        // fprintf(stderr, "[dbg] data_byte c=%d b=%02X\n", (int)count_, (unsigned)byte);
         switch (count_) {
             case 0: case 2: case 4: case 6: case 8: case 10: case 12:
                 tmp_ = byte;
@@ -107,6 +164,15 @@ public:
         if (count_ == 14) {
             sample_.t = t;
             sample_.valid = true;
+            // Per-family display convention (see the header comment).
+            if (convention_ == AxisConvention::Dvxplorer) {
+                sample_.gyro_y = -sample_.gyro_y;
+            } else {  // Davis: rigid 180 deg remount about the camera's Y.
+                sample_.accel_x = -sample_.accel_x;
+                sample_.accel_z = -sample_.accel_z;
+                sample_.gyro_x = -sample_.gyro_x;
+                sample_.gyro_z = -sample_.gyro_z;
+            }
             if (sink_) sink_(sample_);
         }
     }
@@ -132,6 +198,8 @@ private:
     bool bmi160_temp_{false};
     int accel_shift_{3};
     int gyro_mask_{0x07};
+    bool invenSense_gyro_{true};
+    AxisConvention convention_{AxisConvention::Davis};
     ImuModel model_{ImuModel::BoschBMI160};
     ImuSink sink_;
 

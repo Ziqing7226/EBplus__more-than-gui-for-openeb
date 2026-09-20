@@ -81,9 +81,12 @@ public:
     void set_aps_sink(const ApsFrameSink& sink) { aps_.set_sink(sink); }
 
     /// APS sensor configuration (chip model, APS register dimensions before
-    /// orientation swap, MODULE_APS orientation info).
-    void set_aps_config(int model, int device_width, int device_height, int orientation) {
-        aps_.configure(model, device_width, device_height, orientation);
+    /// orientation swap, MODULE_APS orientation info, color filter
+    /// arrangement — MONO=0, RGBG=1, GRGB=2, GBGR=3, BGRG=4).
+    void set_aps_config(int model, int device_width, int device_height,
+                        int orientation, int color_filter = 0) {
+        aps_.configure(model, device_width, device_height, orientation,
+                       color_filter);
     }
 
     /// Full reset (device re-open).
@@ -104,7 +107,10 @@ private:
 
     // DAVIS: X/Y tags carry X first; temperature formula by chip model;
     // accel range code at Scale Config bits [3:2].
-    ImuDecoder imu_{false, false, 2, 0x03};
+    // Reference bit positions (accel [3:2], gyro [1:0]) + the field
+    // calibration factor — see ImuDecoder (davis_cal05).
+    ImuDecoder imu_{false, false, 2, 0x03, true,
+                    ImuDecoder::AxisConvention::Davis};
 
     // APS frame stream (DAVIS-only hardware).
     ApsDecoder aps_;

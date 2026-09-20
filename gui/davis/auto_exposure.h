@@ -21,7 +21,9 @@ inline constexpr double kExposureMinUs = 1.0;
 inline constexpr double kExposureMaxUs = 4194303.0;
 
 /// @brief Reference auto-exposure law.
-/// @param image      current grayscale frame (CV_8UC1; extra channels ignored)
+/// @param image      current grayscale frame (CV_8UC1; callers must
+///                   convert color frames to gray first — the reference
+///                   meters on grayscale only)
 /// @param current_us exposure used for this frame (µs)
 /// @return the exposure to program for the next frame (µs)
 inline double auto_exposure_step(const cv::Mat& image, double current_us) {

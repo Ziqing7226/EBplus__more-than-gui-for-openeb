@@ -52,7 +52,7 @@ constexpr std::uint16_t IMU_ORIENTATION_INFO = 1;
 constexpr std::uint16_t IMU_RUN_ACCELEROMETER = 2;
 constexpr std::uint16_t IMU_RUN_GYROSCOPE = 3;
 constexpr std::uint16_t IMU_RUN_TEMPERATURE = 4;
-constexpr std::uint16_t IMU_SAMPLE_RATE_DIVIDER = 5;
+// (No IMU_SAMPLE_RATE_DIVIDER on this chip — address 5 is ACCEL_DATA_RATE.)
 constexpr std::uint16_t IMU_ACCEL_DATA_RATE = 5;
 constexpr std::uint16_t IMU_ACCEL_FILTER = 6;
 constexpr std::uint16_t IMU_ACCEL_RANGE = 7;
@@ -594,11 +594,23 @@ void DvxplorerDevice::chip_init() {
     spi_config_send(MODULE_MULTIPLEXER, MUX_DROP_DVS_ON_TRANSFER_STALL, false);
 
     // IMU sample config (writes only — the IMU stream stays disabled).
-    spi_config_send(MODULE_IMU, IMU_SAMPLE_RATE_DIVIDER, 0);
-    spi_config_send(MODULE_IMU, IMU_ACCEL_FILTER, 1);
-    spi_config_send(MODULE_IMU, IMU_ACCEL_RANGE, 1);
-    spi_config_send(MODULE_IMU, IMU_GYRO_FILTER, 1);
-    spi_config_send(MODULE_IMU, IMU_GYRO_RANGE, 1);
+    // BMI160 registers (dv dvxplorer.hpp / imu_support.hpp): there is NO
+    // sample-rate divider here (that is the DAVIS/InvenSense layout, where
+    // address 5 means DIVIDER) — on the DVXplorer address 5 is
+    // ACCEL_DATA_RATE, so writing a "divider" there silently parked both
+    // ODRs at the device default (measured: 25 Hz). The reference sets
+    // 800 Hz output on both axes: register value = enum − 5 (accel) /
+    // − 6 (gyro), RATE_800HZ = 11.
+    spi_config_send(MODULE_IMU, IMU_ACCEL_DATA_RATE, 11 - 5);  // 800 Hz
+    spi_config_send(MODULE_IMU, IMU_ACCEL_FILTER, 2);          // NORMAL
+    spi_config_send(MODULE_IMU, IMU_ACCEL_RANGE, 1);           // ±4 g
+    spi_config_send(MODULE_IMU, IMU_GYRO_DATA_RATE, 11 - 6);   // 800 Hz
+    spi_config_send(MODULE_IMU, IMU_GYRO_FILTER, 2);           // NORMAL
+    // ±2000 dps (widest): the DAVIS346 saturated its closed path at ±500.
+    // Discriminator: the in-band Scale Config word should broadcast gyro
+    // code 0 after this write — if the next EBPLUS_IMU_TRACE=1 connect
+    // still shows code 2, the register write is not taking effect.
+    spi_config_send(MODULE_IMU, IMU_GYRO_RANGE, 0);
 
     // External input detector/generator defaults.
     spi_config_send(MODULE_EXTERNAL_INPUT, EXTINPUT_DETECT_RISING_EDGES, false);

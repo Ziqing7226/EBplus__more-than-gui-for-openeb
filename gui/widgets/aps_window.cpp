@@ -43,11 +43,20 @@ void ApsWindow::refresh() {
     const long count = controller_->aps_frame_count();
 
     if (frame.valid && !frame.image.empty()) {
-        // The decoded image is CV_8UC1 grayscale — wrap without copying and
-        // let Qt scale to the label size (smooth for the preview only; the
-        // underlying data is untouched).
-        const QImage img(frame.image.data, frame.image.cols, frame.image.rows,
-            static_cast<qsizetype>(frame.image.step), QImage::Format_Grayscale8);
+        // CV_8UC1 grayscale (most models) wraps directly; the color CDAVIS
+        // decodes to CV_8UC3 BGR and converts to RGB for Qt. fromImage
+        // copies, so the wrapped data may be a temporary.
+        QImage img;
+        if (frame.image.type() == CV_8UC3) {
+            cv::Mat rgb;
+            cv::cvtColor(frame.image, rgb, cv::COLOR_BGR2RGB);
+            img = QImage(rgb.data, rgb.cols, rgb.rows,
+                         static_cast<qsizetype>(rgb.step), QImage::Format_RGB888);
+        } else {
+            img = QImage(frame.image.data, frame.image.cols, frame.image.rows,
+                         static_cast<qsizetype>(frame.image.step),
+                         QImage::Format_Grayscale8);
+        }
         image_label_->setPixmap(QPixmap::fromImage(img).scaled(
             image_label_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
     }

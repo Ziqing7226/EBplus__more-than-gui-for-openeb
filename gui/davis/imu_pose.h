@@ -26,9 +26,11 @@
 // closed paths for exactly the reason that it never lets the accel near
 // the attitude). At rest the gravity reference re-anchors roll/pitch, so
 // the display stays meaningful over long sessions while every motion
-// segment stays gyro-pure. Yaw has no absolute reference (no
-// magnetometer): alignment sets yaw = 0 and it then wanders at the
-// residual-bias rate — disclosed physics, same in the reference.
+// segment stays gyro-pure. At rest the attitude is additionally pulled
+// back onto the DEFAULT pose (the unique alignment attitude: z out of
+// the lens, y up) about the world vertical — the heading component no
+// 6-axis sensor can absolute-reference; the pull is rate-capped like
+// the tilt anchor, so the re-upright is a slow slew, never a snap.
 //
 // Initialization is instant: the first near-1 g sample aligns the
 // attitude (bias starts at 0 and refines in the background; the accel
@@ -52,16 +54,16 @@ namespace gui::davis {
 
 class ImuPose {
 public:
-    /// @param kp proportional gain for the accel tilt feedback (per unit
-    ///        cross-product error; higher = faster convergence, more noise)
-    explicit ImuPose(double kp = 2.0) : two_kp_(2.0 * kp) {}
+    explicit ImuPose() = default;
 
     /// Drops the attitude and the bias estimate.
     void reset() {
         w_ = 1; x_ = 0; y_ = 0; z_ = 0;
         bias_x_ = bias_y_ = bias_z_ = 0;
-        still_run_us_ = 0;
+        sustain_s_ = 0;
+        gy_slow_x_ = gy_slow_y_ = gy_slow_z_ = 0;
         aligned_t_us_ = -1;
+        rest_run_s_ = 0;
         aligned_ = false;
         last_t_ = -1;
     }
@@ -96,6 +98,17 @@ public:
             aligned_ = true;
             aligned_t_us_ = s.t;
             last_t_ = s.t;
+            // Pinning the world frame: the default pose is THE unique
+            // canonical attitude (z out of the lens toward the viewer,
+            // y up, x left). A 6-axis IMU cannot sense compass heading,
+            // so the one free parameter — the world's yaw reference — is
+            // pinned HERE, at alignment: the camera's attitude at this
+            // instant becomes the default pose, and it never changes
+            // afterward. Every window-open renders the same default pose.
+            default_w_ = w_;
+            default_x_ = x_;
+            default_y_ = y_;
+            default_z_ = z_;
             return;
         }
 
@@ -103,30 +116,80 @@ public:
         last_t_ = s.t;
         if (dt <= 0 || dt > 0.2) return;
 
-        const double gm =
-            std::sqrt(s.gyro_x * s.gyro_x + s.gyro_y * s.gyro_y +
-                      s.gyro_z * s.gyro_z);
-
         // Convert gyro to rad/s with the current offset removed.
         double wx = (s.gyro_x - bias_x_) * kDeg2Rad;
         double wy = (s.gyro_y - bias_y_) * kDeg2Rad;
         double wz = (s.gyro_z - bias_z_) * kDeg2Rad;
 
-        // Estimated direction of gravity in the body frame.
-        const double vx = 2.0 * (x_ * z_ - w_ * y_);
-        const double vy = 2.0 * (w_ * x_ + y_ * z_);
-        const double vz = w_ * w_ - x_ * x_ - y_ * y_ + z_ * z_;
-        // Error = cross(measured_accel_normalised, estimated_gravity).
-        double ex = 0, ey = 0, ez = 0;
-        const bool at_rest = gravity_ok && gm < kRestGyroDps;
-        if (at_rest) {
-            const double mx = ax / amag, my = ay / amag, mz = az / amag;
-            ex = my * vz - mz * vy;
-            ey = mz * vx - mx * vz;
-            ez = mx * vy - my * vx;
-            wx += two_kp_ * ex;
-            wy += two_kp_ * ey;
-            wz += two_kp_ * ez;
+        // Smoothed rate envelope: handheld tremor spikes (5-7 deg/s) must
+        // not toggle the stillness gate — stillness is judged on the
+        // SUSTAINED rate, not the instantaneous one.
+        const double env_a = std::min(1.0, dt / kGyroEnvelopeTauS);
+        gy_slow_x_ += (s.gyro_x - gy_slow_x_) * env_a;
+        gy_slow_y_ += (s.gyro_y - gy_slow_y_) * env_a;
+        gy_slow_z_ += (s.gyro_z - gy_slow_z_) * env_a;
+        const double gm_slow =
+            std::sqrt(gy_slow_x_ * gy_slow_x_ + gy_slow_y_ * gy_slow_y_ +
+                      gy_slow_z_ * gy_slow_z_);
+        const double cmx = gy_slow_x_ - bias_x_, cmy = gy_slow_y_ - bias_y_,
+                     cmz = gy_slow_z_ - bias_z_;
+        const double gm_corr =
+            std::sqrt(cmx * cmx + cmy * cmy + cmz * cmz);
+        const bool quiet = gravity_ok && gm_corr < kRestGyroDps;
+        rest_run_s_ = quiet ? rest_run_s_ + dt : 0.0;
+        const bool anchored = quiet && rest_run_s_ >= kAnchorSettleS;
+        if (anchored) {
+            // STILLNESS = 正. At a genuine stop the WHOLE attitude (tilt
+            // and heading together) is pulled onto the default pose along
+            // the shortest arc, and snapped once within ~1 deg — the
+            // residual is zero by fiat. The accelerometer defines
+            // stillness (|a| ~ 1 g) but NEVER touches the attitude after
+            // alignment: with the display's yaw-sign convention the
+            // integrated frame is mirrored w.r.t. the accel frame, so a
+            // gravity anchor would wrench the pose toward a direction the
+            // convention does not share (measured on
+            // rec_20260920_221204: a saturated 40 deg/s wrench during
+            // handheld rest, anchor error standing at ~50 deg).
+            const Q4 qd{default_w_, default_x_, default_y_, default_z_};
+            const Q4 e = qmul(Q4{w_, x_, y_, z_}, Q4{qd.w, -qd.x, -qd.y, -qd.z});
+            const double err_angle =
+                2.0 * std::acos(std::clamp(std::abs(e.w), -1.0, 1.0));
+            double nx_ = e.x, ny_ = e.y, nz_ = e.z;
+            const double vn = std::sqrt(nx_ * nx_ + ny_ * ny_ + nz_ * nz_);
+            if (vn > 1e-12) {
+                nx_ /= vn;
+                ny_ /= vn;
+                nz_ /= vn;
+            } else {
+                nx_ = 0;
+                ny_ = 0;
+                nz_ = 1;
+            }
+            if (e.w < 0) {  // shortest arc
+                nx_ = -nx_;
+                ny_ = -ny_;
+                nz_ = -nz_;
+            }
+            if (err_angle < kReUprightSnapRad) {
+                w_ = default_w_;
+                x_ = default_x_;
+                y_ = default_y_;
+                z_ = default_z_;
+            } else {
+                // Capped slew along the error axis (world frame,
+                // left-multiplied): a quarter turn returns in ~1.1 s at
+                // the 40 deg/s cap; small residuals trim at gain 2/s.
+                const double omega =
+                    std::min(kYawPullGain * err_angle, kMaxAnchorRateRadS);
+                const double half = -omega * dt * 0.5;
+                const Q4 step{std::cos(half), nx_ * std::sin(half),
+                              ny_ * std::sin(half), nz_ * std::sin(half)};
+                const Q4 corrected = qmul(step, Q4{w_, x_, y_, z_});
+                w_ = corrected.w;
+                x_ = corrected.x;
+                y_ = corrected.y;
+                z_ = corrected.z;
+            }
         }
 
         // Bias refinement, frozen like the reference's constant offset.
@@ -138,19 +201,34 @@ public:
         // rotations never sustain 3 s below 3 deg/s, so between parks the
         // bias is FROZEN — closed paths then close with pure
         // bias-subtracted integration, exactly like the reference.
-        const bool park_sample = gravity_ok && gm < kParkGyroDps;
-        if (park_sample) {
-            still_run_us_ += static_cast<std::int64_t>(dt * 1e6);
+        // Bias refinement, per the field rule: a rate that holds SUSTAINED
+        // (>= 1.5 s) and moderate (<= 15 deg/s — anything faster is real
+        // motion) is BY DEFINITION bias. The estimate tracks the smoothed
+        // gyro envelope while that holds and freezes the instant the rate
+        // leaves the band (fast or erratic motion). Once the envelope is
+        // absorbed the corrected rate vanishes, stillness opens, and the
+        // re-upright takes over (静止 = 正); at a true stop the envelope
+        // reads the residual noise and the bias re-adapts to it, so the
+        // absorption is self-correcting.
+        // The instantaneous-vs-envelope difference gates out real motion
+        // ONSET: a hard twist jumps gm far above the envelope on the very
+        // first sample, long before the envelope itself leaves the band.
+        const double gm_inst = std::sqrt(
+            static_cast<double>(s.gyro_x) * s.gyro_x +
+            static_cast<double>(s.gyro_y) * s.gyro_y +
+            static_cast<double>(s.gyro_z) * s.gyro_z);
+        const bool rate_stable = gravity_ok && gm_slow < kAbsorbRateDps &&
+            std::fabs(gm_inst - gm_slow) < kAbsorbStableDps;
+        if (rate_stable) {
+            sustain_s_ += dt;
         } else {
-            still_run_us_ = 0;
+            sustain_s_ = 0;
         }
-        const bool warmup = aligned_t_us_ >= 0 && s.t - aligned_t_us_ < kWarmupUs;
-        if (at_rest && (warmup || still_run_us_ >= kParkHoldUs) &&
-            std::sqrt(ex * ex + ey * ey + ez * ez) < kBiasTiltErrorGate) {
+        if (sustain_s_ >= kAbsorbHoldS) {
             const double a = dt / kBiasTauS;
-            bias_x_ += (s.gyro_x - bias_x_) * a;
-            bias_y_ += (s.gyro_y - bias_y_) * a;
-            bias_z_ += (s.gyro_z - bias_z_) * a;
+            bias_x_ += (gy_slow_x_ - bias_x_) * a;
+            bias_y_ += (gy_slow_y_ - bias_y_) * a;
+            bias_z_ += (gy_slow_z_ - bias_z_) * a;
         }
 
         // Quaternion integration: q' = q + 0.5 * q (x) omega * dt.
@@ -170,6 +248,15 @@ public:
     [[nodiscard]] double x() const { return x_; }
     [[nodiscard]] double y() const { return y_; }
     [[nodiscard]] double z() const { return z_; }
+    /// The default pose — THE unique canonical attitude (z out of the lens
+    /// toward the viewer, y up, x left) that the display shows at startup
+    /// and that the re-upright returns to. It is pinned once at alignment
+    /// (a 6-axis IMU cannot sense compass heading, so the world's yaw
+    /// reference is fixed there) and never changes afterward.
+    [[nodiscard]] double default_w() const { return default_w_; }
+    [[nodiscard]] double default_x() const { return default_x_; }
+    [[nodiscard]] double default_y() const { return default_y_; }
+    [[nodiscard]] double default_z() const { return default_z_; }
     /// The current gyro-bias estimate (deg/s) — diagnostics; converges from
     /// 0 while the chip is still.
     [[nodiscard]] double bias_x_dps() const { return bias_x_; }
@@ -181,32 +268,55 @@ private:
         double w, x, y, z;
     };
     static constexpr double kDeg2Rad = M_PI / 180.0;
-    /// Rest gate shared by the tilt correction and the bias leak: below
-    /// this rotation rate the chip counts as stationary (handheld tremor
-    /// passes, any deliberate turn does not). BOTH accel paths are confined
-    /// to rest — during motion the attitude is PURE bias-subtracted gyro
-    /// integration, which is what makes closed paths return (the reference
-    /// RotationIntegrator behaves this way; every accel touch during
-    /// motion feeds specific force into the path and breaks the loop
-    /// closure — observed on the DAVIS346).
-    static constexpr double kRestGyroDps = 10.0;
-    /// Bias leak additionally requires the attitude to already agree with
-    /// gravity (cross-product error; ~2.9 deg), so a slow real rotation —
-    /// which drags the tilt error up — cannot be absorbed as bias either.
-    static constexpr double kBiasTiltErrorGate = 0.05;
-    /// Bias leak time constant (s).
-    static constexpr double kBiasTauS = 2.0;
-    /// Park discrimination for re-opening the bias leak after the initial
-    /// warm-up: the run counts only below this rotation rate (true park;
-    /// handheld rest reads |bias| + tremor ~ 1.5-2 deg/s, deliberate slow
-    /// rotations read more).
-    static constexpr double kParkGyroDps = 3.0;
-    /// The leak re-opens only after this much unbroken park (us). Mid-
-    /// motion direction-reversal pauses are ~ 0.5-2 s and never reach it.
-    static constexpr std::int64_t kParkHoldUs = 3000000;
-    /// Initial warm-up after alignment during which the leak runs
-    /// unconditionally (the zero-init estimate converges here).
-    static constexpr std::int64_t kWarmupUs = 10000000;
+    /// STILLNESS gate shared by the tilt anchor, the yaw pull and the bias
+    /// leak: below this rotation rate the chip counts as stationary.
+    /// Deliberate slow rotations (2-7 deg/s) sit ABOVE it — they display
+    /// faithfully as pure gyro integration and no accel-driven term may
+    /// touch the attitude during them (the recording rec_20260920_221204
+    /// showed the old 10 deg/s gate letting the tilt anchor wrench the
+    /// attitude at ~23 deg/s during a slow pan — specific force is not
+    /// gravity while rotating). Handheld rest reads |bias| + tremor
+    /// ~1.5-2 deg/s, comfortably below. 静止 = 正: stillness is the one
+    /// and only re-upright trigger.
+    static constexpr double kRestGyroDps = 3.0;
+    /// Time constant of the smoothed gyro-rate envelope the stillness gate
+    /// is judged on (tremor spikes average out; real rotation rises through
+    /// the gate within ~a quarter second).
+    static constexpr double kGyroEnvelopeTauS = 0.25;
+    /// ...and the quiet period must last this long before the accel is
+    /// trusted again: motion direction reversals dip below the rate gate
+    /// for ~10-30 ms only — far shorter than the window. The large-deviation
+    /// snap is prevented by the correction-rate CAP below, not by this
+    /// window, so it is kept short on purpose (the re-upright must start
+    /// promptly after the camera stops).
+    static constexpr double kAnchorSettleS = 0.3;
+    /// Cap on the anchor correction rate (rad/s): large deviations re-
+    /// upright at this fixed slew. 0.698 rad/s = 40 deg/s (doubled again
+    /// per user request; a quarter turn returns in ~1.1 s) and the final
+    /// snap lands the attitude exactly on the default pose.
+    static constexpr double kMaxAnchorRateRadS = 0.698;
+    /// Proportional gain (1/s) of the yaw pull toward the default pose's
+    /// heading — the time constant of the exponential tail once the error
+    /// is below the rate cap.
+    static constexpr double kYawPullGain = 2.0;
+    /// At rest, once the attitude is within this angle of the default pose
+    /// the re-upright SNAPS onto it: the residual is zero by fiat instead
+    /// of an exponential tail.
+    static constexpr double kReUprightSnapRad = 0.0175;  // ~1 deg
+    /// Bias tracking time constant (s) while a sustained moderate rate
+    /// holds.
+    static constexpr double kBiasTauS = 1.0;
+    /// A rate at or below this (smoothed) magnitude, held SUSTAINED, is
+    /// bias by definition; faster is real motion and must integrate.
+    static constexpr double kAbsorbRateDps = 15.0;
+    /// Sustained duration before the rate counts as bias (the user's
+    /// rule: 1-2 s of constant angular velocity is bias).
+    static constexpr double kAbsorbHoldS = 1.5;
+    /// The leak runs only while the instantaneous rate agrees with the
+    /// envelope to within this — a real twist jumps the instantaneous rate
+    /// far above the envelope on its first sample, freezing the bias at
+    /// once (no motion-onset kick).
+    static constexpr double kAbsorbStableDps = 4.0;
 
     static Q4 qmul(const Q4& a, const Q4& b) {
         return {a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
@@ -216,12 +326,16 @@ private:
     }
 
     double w_{1}, x_{0}, y_{0}, z_{0};
+    double default_w_{1}, default_x_{0}, default_y_{0}, default_z_{0};
     double bias_x_{0}, bias_y_{0}, bias_z_{0};
-    double two_kp_{4.0};
     bool aligned_{false};
     std::int64_t last_t_{-1};
     std::int64_t aligned_t_us_{-1};
-    std::int64_t still_run_us_{0};
+    double rest_run_s_{0};
+    double sustain_s_{0};
+    double gy_slow_x_{0};
+    double gy_slow_y_{0};
+    double gy_slow_z_{0};
 };
 
 } // namespace gui::davis

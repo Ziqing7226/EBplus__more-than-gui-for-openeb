@@ -18,14 +18,17 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace gui::davis {
 
-/// One completed APS frame (CV_8UC1 grayscale — the raw Bayer pattern on
-/// color sensors, matching the reference's "original" color mode).
+/// One completed APS frame — CV_8UC1 grayscale, or CV_8UC3 BGR for the
+/// color CDAVIS (the reference's "original" color mode demosaiced).
 struct ApsFrame {
     std::int64_t t{0};  ///< Exposure-start stream time (rebased µs).
     std::uint16_t x{0}; ///< ROI position X within the user frame.
@@ -47,10 +50,12 @@ public:
     ///        (MODULE_APS size columns/rows, before orientation swap).
     ///        @param orientation MODULE_APS orientation info (bit 0x04 =
     ///        inverted axes, as on the DAVIS346).
-    void configure(int model, int device_width, int device_height, int orientation) {
+    void configure(int model, int device_width, int device_height, int orientation,
+                   int color_filter = 0) {
         model_ = model;
         is_240_ = (model == 0 || model == 1 || model == 2);
         is_cdavis_ = (model == 7);
+        color_filter_ = (color_filter >= 1 && color_filter <= 4) ? color_filter : 0;
         invert_xy_ = (orientation & 0x04) != 0;
         flip_x_ = (orientation & 0x02) != 0;
         flip_y_ = (orientation & 0x01) != 0;
@@ -147,6 +152,17 @@ public:
     /// Frame end (special 10): emits a clone of the frame when both readout
     /// passes completed with the expected column counts.
     void frame_end(std::int64_t /*t*/) {
+        if (dbg_ && count_x_[0] == expected_x_ && count_x_[1] == expected_x_) {
+            std::fprintf(stderr,
+                "[aps-dbg] white: parity[00]=%d [01]=%d [10]=%d [11]=%d  "
+                "reset_low=%d signal_zero=%d\n",
+                dbg_white_parity_[0], dbg_white_parity_[1],
+                dbg_white_parity_[2], dbg_white_parity_[3],
+                dbg_white_reset_low_, dbg_white_signal_zero_);
+            dbg_white_parity_[0] = dbg_white_parity_[1] = dbg_white_parity_[2] =
+                dbg_white_parity_[3] = 0;
+            dbg_white_reset_low_ = dbg_white_signal_zero_ = 0;
+        }
         if (count_x_[0] == expected_x_ && count_x_[1] == expected_x_ && !pixels_.empty()) {
             ApsFrame frame;
             frame.t = exposure_us_;
@@ -154,7 +170,44 @@ public:
             frame.y = roi_y_;
             frame.width = pixels_.cols;
             frame.height = pixels_.rows;
-            frame.image = pixels_.clone();
+            static const bool raw_dump =
+                std::getenv("EBPLUS_APS_RAW") != nullptr;
+            dbg_ = std::getenv("EBPLUS_APS_DEBUG") != nullptr;
+            if (raw_dump) {
+                frame.image = pixels_.clone();  // raw mosaic, diagnostics
+            } else if (is_cdavis_) {
+                frame.image = demosaic_cdavis(pixels_);
+            } else if (color_filter_ != 0) {
+                // Standard Bayer color sensor (e.g. the DAVIS346 color):
+                // demosaic with the reference's edge-aware conversion. The
+                // OpenCV code follows the color of the frame's first pixel
+                // — exactly the reference's colorForPoint({positionX,
+                // positionY}, colorFilter) on the output-frame ROI position.
+                const int px = roi_x_, py = roi_y_;
+                // First-pixel color per the reference PIXEL_COLOR_KEYS
+                // (1 = R, 2 = G1, 3 = G2, 4 = B).
+                static constexpr int kFirstColor[5][4] = {
+                    {0, 0, 0, 0},
+                    {1, 2, 3, 4},  // RGBG
+                    {2, 1, 4, 3},  // GRGB
+                    {3, 4, 1, 2},  // GBGR
+                    {4, 3, 2, 1},  // BGRG
+                };
+                const int first =
+                    kFirstColor[color_filter_][((py & 1) << 1) | (px & 1)];
+                int code = 0;
+                switch (first) {  // reference frameDebayer mapping
+                    case 1: code = cv::COLOR_BayerBG2BGR_EA; break;   // R
+                    case 2: code = cv::COLOR_BayerGB2BGR_EA; break;   // G1
+                    case 3: code = cv::COLOR_BayerGR2BGR_EA; break;   // G2
+                    default: code = cv::COLOR_BayerRG2BGR_EA; break;  // B
+                }
+                cv::Mat color;
+                cv::cvtColor(pixels_, color, code);
+                frame.image = color;
+            } else {
+                frame.image = pixels_.clone();
+            }
             frame.valid = true;
             if (sink_) sink_(frame);
         }
@@ -220,6 +273,12 @@ private:
             // Saturated pixels: reference cutoff filter (black-spot removal).
             if (reset_value < 96 || data_value == 0) {
                 cell = 255;
+                if (dbg_) {
+                    const int parity = (yPos & 1) << 1 | (xPos & 1);
+                    dbg_white_parity_[parity]++;
+                    if (reset_value < 96) dbg_white_reset_low_++;
+                    if (data_value == 0) dbg_white_signal_zero_++;
+                }
             } else {
                 cell = static_cast<std::uint8_t>(
                     std::clamp<int>(reset_value - data_value, 0, 255));
@@ -269,9 +328,31 @@ private:
         cdavis_y_ += cdavis_direction_down_ ? 2 : -2;
     }
 
+    /// CDAVIS color: the on-chip filter is an RGBW arrangement per 2x2
+    /// tile — upper-left G, upper-right R, lower-left B, lower-right W
+    /// (panchromatic; jAER CDAVIS.COLOR_FILTER). Each hue forms a
+    /// quarter-density lattice: bilinear-upsample every channel to full
+    /// resolution and merge to BGR. The W pixels carry no hue and are
+    /// skipped (they read the full intensity, so the mono path on any
+    /// other model is unaffected).
+    cv::Mat demosaic_cdavis(const cv::Mat& mosaic) const {
+        cv::Mat even = mosaic(
+            cv::Rect(0, 0, mosaic.cols & ~1, mosaic.rows & ~1));
+        cv::Mat g = even(cv::Rect(0, 0, even.cols / 2, even.rows / 2)).clone();
+        cv::Mat r = even(cv::Rect(1, 0, even.cols / 2, even.rows / 2)).clone();
+        cv::Mat b = even(cv::Rect(0, 1, even.cols / 2, even.rows / 2)).clone();
+        cv::resize(g, g, even.size(), 0, 0, cv::INTER_LINEAR);
+        cv::resize(r, r, even.size(), 0, 0, cv::INTER_LINEAR);
+        cv::resize(b, b, even.size(), 0, 0, cv::INTER_LINEAR);
+        cv::Mat out;
+        cv::merge(std::vector<cv::Mat>{b, g, r}, out);
+        return out;
+    }
+
     int model_{5};  // DAVIS346 default.
     bool is_240_{false};
     bool is_cdavis_{false};
+    int color_filter_{0};
     bool invert_xy_{false};
     bool flip_x_{false};
     bool flip_y_{false};
@@ -294,6 +375,12 @@ private:
     bool current_reset_pass_{true};
     bool global_shutter_{false};
     std::int64_t exposure_us_{0};
+
+    // Diagnostics (EBPLUS_APS_DEBUG): white-pixel classification.
+    bool dbg_{false};
+    int dbg_white_parity_[4]{0, 0, 0, 0};
+    int dbg_white_reset_low_{0};
+    int dbg_white_signal_zero_{0};
 
     // CDAVIS odd/even row walk.
     int cdavis_y_{0};
