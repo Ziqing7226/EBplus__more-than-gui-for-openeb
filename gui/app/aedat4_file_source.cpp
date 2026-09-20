@@ -402,7 +402,10 @@ void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn)
     // sizeX=VT16, sizeY=VT18, posX=VT20, posY=VT22, pixels=VT24,
     // exposure=VT26, source=VT28.
     const std::int64_t ts = fb.scalar<std::int64_t>(table, 4, 0);
-    const std::int32_t format = fb.scalar<std::int32_t>(table, 14, 0);
+    // The format slot is written as a single byte (frame.fbs enum; the
+    // writer byte-packs the table), so read it as uint8 — a 4-byte read
+    // would swallow the sizeX bytes and drop every frame.
+    const auto format = fb.scalar<std::uint8_t>(table, 14, static_cast<std::uint8_t>(0));
     const int channels = (format == 2) ? 3 : 1;  // OPENCV_8U_C3 / C1
     const std::int16_t w = fb.scalar<std::int16_t>(table, 16, 0);
     const std::int16_t h = fb.scalar<std::int16_t>(table, 18, 0);
