@@ -115,7 +115,7 @@ Not a menu item, but related: in the **Algorithms** panel's Preprocessing group,
 ## Recording & Playback
 
 - **Prophesee / CenturyArks** — record to `.raw` (SDK RAW format).
-- **inivation DAVIS / DVXplorer** — record to **AEDAT4** (opens in DV and other inivation tools): the recording automatically includes the event stream, the IMU samples and (on DAVIS) the APS frames — no checkboxes needed.
+- **inivation DAVIS / DVXplorer** — record to **AEDAT4** (opens in DV and other inivation tools). The record dialog shows **Include IMU samples** / **Include APS frames** checkboxes (only for cameras that have the stream; both included by default) — the recorded file carries exactly what you selected.
 - **Playback** — open `.raw`, `.aedat4` and `.alpdata` files; speed control, seek, pause/resume, position tracking. Playback window displays integer microseconds (no scientific notation); playback rate shows 6 decimal places.
 - **AEDAT4 replay visualization** — a recording that contains IMU samples and/or APS frames shows the same **IMU stream** / **APS frames** checkboxes (Devices panel) as a live camera; the IMU and APS windows work against the replayed data exactly as against hardware.
 - **Loop playback** — cyclic playback; algorithm temporal state resets on each loop to avoid frozen output.

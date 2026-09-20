@@ -27,6 +27,7 @@ class Aedat4Writer {
 public:
     /// FileDataTable record per written packet.
     struct Entry {
+        std::int32_t sid;   ///< stream ID (0 events, 1 IMU, 2 APS frames)
         std::int32_t size;
         std::int64_t num;
         std::int64_t ts0;
@@ -40,9 +41,13 @@ public:
     Aedat4Writer& operator=(const Aedat4Writer&) = delete;
 
     /// @brief Opens @p path and writes the header. @p source names the
-    ///        camera (recorded in the stream-info XML).
+    ///        camera (recorded in the stream-info XML). @p imu_stream /
+    ///        @p aps_stream declare the side streams this recording will
+    ///        produce — a stream that is not declared cannot be misread as
+    ///        present by players (e.g. DVXplorer has no APS at all).
     bool open(const std::string& path, int width, int height,
-              const std::string& source);
+              const std::string& source,
+              bool imu_stream = true, bool aps_stream = true);
     /// @brief Appends a batch (called from the USB thread). Accumulates and
     ///        flushes a packet once the threshold is reached.
     void write(const Metavision::EventCD* begin, const Metavision::EventCD* end);

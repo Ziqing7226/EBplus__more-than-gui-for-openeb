@@ -208,11 +208,19 @@ public:
     [[nodiscard]] long aps_frame_count() const;
     /// @brief IMU plotting (Phase 2 visualization): drains the retained
     /// sample ring after @p cursor (sequence numbers from
-    /// imu_sample_count(); pass INT64_MIN to start from the LATEST sample
-    /// — a fresh viewer must skip the up-to-10 s backlog or the pose
-    /// integration replays it at once). Returns the new samples in stream
+    /// imu_sample_count()). Live sources: a fresh viewer (INT64_MIN) starts
+    /// from the LATEST sample — integrating the stale backlog would fling
+    /// the pose. File replays: a fresh viewer receives the WHOLE retained
+    /// recording (samples decode once and never arrive again), served up to
+    /// the current playback position. Returns the new samples in stream
     /// order and advances @p cursor. Without libusb returns an empty vector.
     std::vector<davis::ImuSample> drain_imu(std::int64_t& cursor);
+    /// Current file-playback position (µs, normalized to file start) —
+    /// gates IMU replay so the attitude animates with the playback.
+    /// Negative when no file playback position is known (live sources).
+    [[nodiscard]] Metavision::timestamp file_playback_position_us() const {
+        return file_playback_pos_.load(std::memory_order_relaxed);
+    }
 
     /// @brief Unified ROI entry point (Phase 2.6): the single ROI concept.
     /// Live camera: applies the hardware ROI (I_ROI) so the sensor itself
@@ -303,6 +311,9 @@ public:
     void auto_bias_rate_bounds(float& lo_mev, float& hi_mev) const;
 
 signals:
+    /// AEDAT4 replay discovered an actual IMU(true)/APS(false) packet —
+    /// fired once per stream, on the reader thread (UI updates must queue).
+    void file_side_stream_discovered(bool imu);
     void connected(const SensorInfo& info);
     void disconnected();
     void started();
@@ -400,8 +411,12 @@ private:
     /// Unconditional — the AEDAT4 recorder installs it for inivation
     /// sources only, but the accessor itself has no inivation dependency.
     RawTap raw_tap_;
+    /// File-playback position (mirrored from the FramePipeline signal).
+    std::atomic<Metavision::timestamp> file_playback_pos_{-1};
     std::function<void(const davis::ImuSample&)> imu_tap_;
     std::function<void(const davis::ApsFrame&)> aps_tap_;
+    std::atomic<bool> imu_discovered_{false};
+    std::atomic<bool> aps_discovered_{false};
     /// External (non-SDK) file source and its reader thread. Mutually
     /// exclusive with camera_: only one is ever set.
     std::unique_ptr<ExternalFileSource> external_source_;

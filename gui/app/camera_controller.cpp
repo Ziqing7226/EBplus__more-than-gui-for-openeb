@@ -28,6 +28,12 @@ constexpr unsigned long long kWarnEventCount = 150'000'000;
 
 CameraController::CameraController(QObject* parent)
     : QObject(parent), frame_pipeline_(nullptr), statistics_(nullptr) {
+    // Mirror the file-playback position for IMU-replay gating (the IMU
+    // window animates with the playback instead of jumping to the end).
+    connect(&frame_pipeline_, &FramePipeline::file_position_changed, this,
+            [this](Metavision::timestamp pos, Metavision::timestamp) {
+                file_playback_pos_.store(pos, std::memory_order_relaxed);
+            });
     // Surface the FileFrameGenerator's OOM guard (audit §六-C2b) through
     // the existing warning chain (status bar in MainWindow). The signal
     // is emitted from the SDK streaming thread; Qt queues it here.
@@ -312,18 +318,23 @@ bool CameraController::connect_external_file(std::unique_ptr<ExternalFileSource>
     // never see data. set_imu_enabled/set_aps_enabled stay meaningful for
     // the session state; the file stream itself cannot be switched.
 #if GUI_HAVE_DAVIS
-    if (external_source_->has_imu()) {
-        imu_enabled_ = true;
-        external_source_->set_imu_sink([this](const davis::ImuSample& s) {
-            if (imu_enabled_) on_imu_sample(s);
-        });
-    }
-    if (external_source_->has_aps()) {
-        aps_enabled_ = true;
-        external_source_->set_aps_sink([this](const davis::ApsFrame& f) {
-            if (aps_enabled_) on_aps_frame(f);
-        });
-    }
+    // Side streams appear by CONTENT: the first decoded packet flips the
+    // flags, checks the Devices-panel boxes and (via the MainWindow hook on
+    // file_side_stream_discovered) opens the matching windows.
+    external_source_->set_imu_sink([this](const davis::ImuSample& s) {
+        if (!imu_discovered_.exchange(true)) {
+            imu_enabled_ = true;
+            emit file_side_stream_discovered(true);
+        }
+        on_imu_sample(s);
+    });
+    external_source_->set_aps_sink([this](const davis::ApsFrame& f) {
+        if (!aps_discovered_.exchange(true)) {
+            aps_enabled_ = true;
+            emit file_side_stream_discovered(false);
+        }
+        on_aps_frame(f);
+    });
 #endif
 
     sensor_info_ = SensorInfo{};
@@ -823,9 +834,17 @@ std::vector<davis::ImuSample> CameraController::drain_imu(std::int64_t& cursor) 
 #if GUI_HAVE_DAVIS
     std::lock_guard<std::mutex> lock(imu_mutex_);
     if (cursor == std::numeric_limits<std::int64_t>::min()) {
-        // Fresh consumer: skip the retained backlog, start at the newest.
-        cursor = imu_count_;
-        return {};
+        if (!is_file_source()) {
+            // Fresh LIVE consumer: skip the retained backlog, start at the
+            // newest (old samples are stale history for a live stream).
+            cursor = imu_count_;
+            return {};
+        }
+        // File replay: the samples decoded ONCE when the file opened —
+        // they will never "arrive" again, so a consumer attached later
+        // (the IMU window opened mid-replay) must still receive the
+        // whole retained recording.
+        cursor = imu_count_ - static_cast<std::int64_t>(imu_ring_.size());
     }
     if (cursor >= imu_count_) {
         cursor = imu_count_;
@@ -835,12 +854,22 @@ std::vector<davis::ImuSample> CameraController::drain_imu(std::int64_t& cursor) 
     // whatever is retained from the oldest surviving sample on.
     const auto oldest = imu_count_ - static_cast<std::int64_t>(imu_ring_.size());
     if (cursor < oldest) cursor = oldest;
+    // File replay: serve samples up to the playback position so the IMU
+    // window animates in sync with the event playback (negative = no
+    // position known, serve everything).
+    const auto gate = is_file_source() ? file_playback_pos_.load(std::memory_order_relaxed) : -1;
     std::vector<davis::ImuSample> out;
     out.reserve(imu_ring_.size());
+    std::int64_t delivered = cursor;
     for (const auto& [seq, sample] : imu_ring_) {
-        if (seq > cursor) out.push_back(sample);
+        if (seq <= delivered) continue;
+        if (gate >= 0 && sample.t > gate) continue;  // not played yet
+        out.push_back(sample);
+        delivered = seq;
     }
-    if (!imu_ring_.empty()) cursor = imu_ring_.back().first;
+    // The cursor only advances over DELIVERED samples: gated ones stay
+    // available for the next drain as the playback position advances.
+    if (!imu_ring_.empty()) cursor = std::max(delivered, cursor);
     return out;
 #else
     (void)cursor;
@@ -1329,6 +1358,9 @@ void CameraController::teardown() {
     raw_tap_ = nullptr;
     imu_tap_ = nullptr;
     aps_tap_ = nullptr;
+    file_playback_pos_.store(-1, std::memory_order_relaxed);
+    imu_discovered_.store(false);
+    aps_discovered_.store(false);
     // 0. Stop the external reader FIRST: it feeds statistics_ and
     //    frame_pipeline_ from its own thread, so it must be joined before
     //    the pipeline is stopped below.

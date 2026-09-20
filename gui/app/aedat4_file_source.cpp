@@ -263,8 +263,10 @@ void Aedat4FileSource::open() {
         stream_is_events_[id] = (info.type == QStringLiteral("EVTS"));
         stream_is_imu_[id] = (info.type.trimmed() == QStringLiteral("IMU"));
         stream_is_aps_[id] = (info.type == QStringLiteral("FRME"));
-        has_imu_ = has_imu_ || stream_is_imu_[id];
-        has_aps_ = has_aps_ || stream_is_aps_[id];
+        // has_imu_/has_aps_ are finalized from the data table's actual
+        // packet list (parse_data_table); declarations alone would mark a
+        // DVXplorer recording as having APS just because the writer's XML
+        // template mentions the stream.
         if (stream_is_events_[id]) {
             meta_.width = info.width > 0 ? info.width : meta_.width;
             meta_.height = info.height > 0 ? info.height : meta_.height;
@@ -324,6 +326,11 @@ void Aedat4FileSource::parse_data_table(std::ifstream& file, std::streamoff pos)
         const std::size_t info = fb.field(entry, 6);
         if (info == 0 || !fb.valid(info, 8)) return;
         const std::int32_t sid = fb.i32(info);
+        // Side-stream presence follows the ACTUAL packet content, not the
+        // XML declaration (writers may declare streams they never filled —
+        // e.g. a DVXplorer recording declares FRME it cannot produce).
+        if (stream_is_imu_[sid]) has_imu_ = true;
+        if (stream_is_aps_[sid]) has_aps_ = true;
         auto it = stream_is_events_.find(sid);
         if (it == stream_is_events_.end() || !it->second) continue;
         const std::int64_t n = fb.scalar<std::int64_t>(entry, 8, 0);
@@ -358,6 +365,7 @@ void Aedat4FileSource::decode_imu_body(const std::uint8_t* pd, std::size_t pn) {
         if (!fb.valid(elem, 52)) return;
         davis::ImuSample s;
         s.t = fb.i64(elem + 4);
+        if (ev_t0_known_) s.t -= ev_t0_;
         s.temperature = fb.f32(elem + 12);
         s.accel_x = fb.f32(elem + 16);
         s.accel_y = fb.f32(elem + 20);
@@ -366,6 +374,17 @@ void Aedat4FileSource::decode_imu_body(const std::uint8_t* pd, std::size_t pn) {
         s.gyro_y = fb.f32(elem + 32);
         s.gyro_z = fb.f32(elem + 36);
         s.valid = true;
+        if (!has_imu_) {
+            has_imu_ = true;  // discovered by content (FTAB entries of
+                              // older builds mislabel every packet as events)
+            if (side_stream_discovered_) side_stream_discovered_(true);
+        }
+        if (!ev_t0_known_) {
+            // File order can place IMU packets before the first event —
+            // hold them until the shared normalization clock is known.
+            if (imu_pending_norm_.size() < 8192) imu_pending_norm_.push_back(s);
+            continue;
+        }
         imu_sink_(s);
     }
 }
@@ -392,6 +411,10 @@ void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn)
         (pn - vec - 4) < count) {
         return;
     }
+    if (!has_aps_) {
+        has_aps_ = true;
+        if (side_stream_discovered_) side_stream_discovered_(false);
+    }
     davis::ApsFrame frame;
     frame.t = ts;
     frame.width = w;
@@ -411,7 +434,12 @@ void Aedat4FileSource::run(EventSink sink, DoneFn done) {
         std::vector<std::uint8_t> body;
         std::vector<std::uint8_t> plain;
         std::vector<Metavision::EventCD> batch;
-        std::int64_t t0 = std::numeric_limits<std::int64_t>::min();
+        // One normalization clock for every stream: the first timestamp of
+        // the file (event or IMU, whichever decodes first) becomes zero, so
+        // replay-side consumers can align IMU samples with the event
+        // playback position.
+        ev_t0_known_ = false;
+        ev_t0_ = 0;
         std::int64_t last_t = std::numeric_limits<std::int64_t>::min();
 
         const std::streamoff stream_end =
@@ -519,12 +547,21 @@ void Aedat4FileSource::run(EventSink sink, DoneFn done) {
                 const std::int16_t x = fb.i16(off + 8);
                 const std::int16_t y = fb.i16(off + 10);
                 const std::uint8_t pol = fb.d[off + 12];
-                if (t0 == std::numeric_limits<std::int64_t>::min()) {
-                    t0 = t; // normalize epoch-scale timestamps to start at 0
+                if (!ev_t0_known_) {
+                    ev_t0_known_ = true;
+                    ev_t0_ = t; // normalize to start at 0 (all streams)
                     last_t = std::numeric_limits<std::int64_t>::min();
                     out_of_order = false;
+                    // IMU samples decoded before the first event arrive in
+                    // file order — emit them now, normalized.
+                    for (const auto& p : imu_pending_norm_) {
+                        auto s = p;
+                        s.t -= ev_t0_;
+                        if (imu_sink_) imu_sink_(s);
+                    }
+                    imu_pending_norm_.clear();
                 }
-                t -= t0;
+                t -= ev_t0_;
                 if (x < 0 || x >= meta_.width || y < 0 || y >= meta_.height) continue;
                 Metavision::EventCD ev;
                 ev.t = static_cast<Metavision::timestamp>(t);

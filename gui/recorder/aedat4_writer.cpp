@@ -237,7 +237,7 @@ void build_data_table(std::vector<std::uint8_t>& out,
         out.resize(vtable + 14);
         put_u32(out, slot, static_cast<std::uint32_t>(entry - slot));
         put_i32_at(out, entry, static_cast<std::int32_t>(entry - vtable));
-        put_i32_at(out, entry + 4, 0);  // VT6 struct: streamID
+        put_i32_at(out, entry + 4, entries[i].sid);  // VT6 struct: streamID
         put_i32_at(out, entry + 8, entries[i].size);
         std::memcpy(out.data() + entry + 12, &entries[i].num, 8);   // VT8
         std::memcpy(out.data() + entry + 20, &entries[i].ts0, 8);   // VT10
@@ -259,7 +259,8 @@ Aedat4Writer::~Aedat4Writer() {
 }
 
 bool Aedat4Writer::open(const std::string& path, int width, int height,
-                        const std::string& source) {
+                        const std::string& source,
+                        bool imu_stream, bool aps_stream) {
     std::lock_guard<std::mutex> lock(mtx_);
     if (file_) return false;
     std::FILE* f = std::fopen(path.c_str(), "wb");
@@ -282,8 +283,9 @@ bool Aedat4Writer::open(const std::string& path, int width, int height,
     xml += "                <attr key=\"source\" type=\"string\">" + source + "</attr>\n";
     xml += "            </node>\n";
     xml += "        </node>\n";
-    // Stream 1 = IMU (samples are only written when the stream is enabled,
-    // but the declaration is unconditional — an empty stream is harmless).
+    // Side streams are declared only when they will actually be recorded —
+    // players treat a declared stream as present.
+    if (imu_stream) {
     xml += "        <node name=\"1\" path=\"/mainloop/Recorder/outInfo/1/\">\n";
     xml += "            <attr key=\"compression\" type=\"string\">NONE</attr>\n";
     xml += "            <attr key=\"originalModuleName\" type=\"string\">capture</attr>\n";
@@ -294,6 +296,8 @@ bool Aedat4Writer::open(const std::string& path, int width, int height,
     xml += "                <attr key=\"source\" type=\"string\">\"" + source + "\"</attr>\n";
     xml += "            </node>\n";
     xml += "        </node>\n";
+    }
+    if (aps_stream) {
     // Stream 2 = APS frames (grayscale 8-bit).
     xml += "        <node name=\"2\" path=\"/mainloop/Recorder/outInfo/2/\">\n";
     xml += "            <attr key=\"compression\" type=\"string\">NONE</attr>\n";
@@ -307,6 +311,7 @@ bool Aedat4Writer::open(const std::string& path, int width, int height,
     xml += "                <attr key=\"source\" type=\"string\">\"" + source + "\"</attr>\n";
     xml += "            </node>\n";
     xml += "        </node>\n";
+    }
     xml += "    </node>\n";
     xml += "</dv>\n";
 
@@ -369,7 +374,7 @@ void Aedat4Writer::write_aps(const davis::ApsFrame& f) {
         std::fwrite(packet.data(), 1, packet.size(), file_) != packet.size()) {
         return;
     }
-    entries_.push_back({body_size, 1, f.t, f.t});
+    entries_.push_back({2, body_size, 1, f.t, f.t});
 }
 
 void Aedat4Writer::flush_imu_locked() {
@@ -387,7 +392,7 @@ void Aedat4Writer::flush_imu_locked() {
         std::fwrite(packet.data(), 1, packet.size(), file_) != packet.size()) {
         return;
     }
-    entries_.push_back({body_size, n, std::min(ts0, ts1), std::max(ts0, ts1)});
+    entries_.push_back({1, body_size, n, std::min(ts0, ts1), std::max(ts0, ts1)});
 }
 
 void Aedat4Writer::flush_locked() {
@@ -407,7 +412,7 @@ void Aedat4Writer::flush_locked() {
     std::int64_t ts0 = pending_.front().t;
     std::int64_t ts1 = pending_.back().t;
     if (ts1 < ts0) std::swap(ts0, ts1);
-    entries_.push_back({body_size, static_cast<std::int64_t>(pending_.size()), ts0, ts1});
+    entries_.push_back({0, body_size, static_cast<std::int64_t>(pending_.size()), ts0, ts1});
     total_events_ += pending_.size();
     pending_.clear();
 }

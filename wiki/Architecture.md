@@ -179,8 +179,9 @@ directly (always current, never delayed by the event flood).
 
 - Events are conditioned once (ROI, filters, noise, undistort, flips) and
   every consumer shares that output.
-- Recordings tap the decoded stream before display processing, so a file
-  always contains the complete sensor output (events + IMU + APS).
+- Recordings tap the decoded stream before display processing, so the file
+  contains exactly the streams selected in the record dialog (events, plus
+  the optional IMU / APS side streams).
 
 ### File playback mode
 
@@ -193,8 +194,8 @@ AEDAT4 / ALPDATA    → external source reader thread → FramePipeline buffer
 - All events buffer on open (real_time_playback=false); playback rate,
   seek, pause/resume and loop run from the buffer. AEDAT4 replays surface
   their IMU/APS side streams through the same controller slots as live
-  devices (the IMU ring decodes once, in file order — seek acts on the
-  event/frame buffer).
+  devices, and the IMU attitude animates in sync with the playback
+  position (seek and loop replay the attitude too).
 - Loop playback re-signals algorithm `reset()` to clear temporal state each iteration.
 
 ## Threading Model

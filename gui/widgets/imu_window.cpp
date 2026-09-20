@@ -66,6 +66,15 @@ ImuWindow::ImuWindow(CameraController* controller, QWidget* parent)
 }
 
 void ImuWindow::refresh() {
+    // File replay: the playback position can jump backward (seek or loop
+    // wrap). Re-integrate from the earliest retained sample so the pose
+    // animates with the playback instead of staying parked at the far end.
+    const auto replay_pos = controller_->file_playback_position_us();
+    if (replay_pos >= 0 && last_t_seen_ > 0 && last_t_seen_ > replay_pos + 200000) {
+        imu_cursor_ = std::numeric_limits<std::int64_t>::min();
+        last_t_seen_ = -1;
+        pose_.reset();
+    }
     const auto fresh = controller_->drain_imu(imu_cursor_);
     const long count = controller_->imu_sample_count();
     // Session restart (the controller resets its counter when the stream is

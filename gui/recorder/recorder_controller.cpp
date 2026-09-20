@@ -54,21 +54,24 @@ bool RecorderController::start(CameraController* controller, const QString& path
         const auto& info = controller->sensor_info();
         aedat4_writer_ = std::make_shared<Aedat4Writer>();
         if (!aedat4_writer_->open(path.toStdString(), info.width, info.height,
-                                  info.serial.toStdString())) {
+                                  info.serial.toStdString(),
+                                  include_imu_,
+                                  include_aps_ && controller->source_capabilities().aps)) {
             aedat4_writer_.reset();
             emit error(tr("Failed to open recording file:\n%1").arg(path));
             return false;
         }
         written_events_ = 0;
-        // Recordings capture the complete device stream: enable the IMU
-        // (and DAVIS APS) side streams even if the user never ticked the
-        // Devices-panel checkboxes — a recording silently missing the IMU
-        // defeats offline analysis. The prior state is restored on stop().
+        // The record dialog chooses which side streams the file includes:
+        // enable the requested streams for the recording; the user's panel
+        // state is restored on stop().
         imu_was_enabled_ = controller->imu_enabled();
         aps_was_enabled_ = controller->aps_enabled();
-        if (!imu_was_enabled_) controller->set_imu_enabled(true);
-        const bool davis_aps = controller->source_capabilities().aps;
-        if (davis_aps && !aps_was_enabled_) controller->set_aps_enabled(true);
+        if (include_imu_ && !imu_was_enabled_) controller->set_imu_enabled(true);
+        if (include_aps_ && controller->source_capabilities().aps &&
+            !aps_was_enabled_) {
+            controller->set_aps_enabled(true);
+        }
         auto writer = aedat4_writer_;  // in-flight batches outlive stop()
         controller->set_raw_tap([this, writer](const Metavision::EventCD* b,
                                                const Metavision::EventCD* e) {

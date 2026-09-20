@@ -15,7 +15,11 @@
 
 #include <gtest/gtest.h>
 
-#include <QCoreApplication>
+#include <QApplication>
+#include <QCheckBox>
+#include <QPushButton>
+
+#include <limits>
 
 #include <atomic>
 #include <chrono>
@@ -30,6 +34,7 @@
 #include <filesystem>
 #include "recorder/playback_controller.h"
 #include "recorder/recorder_controller.h"
+#include "recorder/record_dialog.h"
 
 namespace {
 
@@ -73,10 +78,12 @@ TEST(Aedat4Playback, RealFileGuiIntegration) {
     EXPECT_GT(controller.sensor_info().height, 0);
     EXPECT_EQ(controller.sensor_info().encoding_format, QStringLiteral("EVTS"));
 
-    // Events-only recording (pre side-stream build): no IMU/APS/trigger/ESP.
+    // The recording defines its own stream set (legacy files are
+    // events-only; new builds record IMU/APS too) — only the HAL-facility
+    // panels are absent for every AEDAT4 file. Consistency pin: if IMU/APS
+    // samples were decoded, the capability flag must be up (side-stream
+    // presence is discovered by content, never from declarations).
     const auto caps = controller.source_capabilities();
-    EXPECT_FALSE(caps.imu);
-    EXPECT_FALSE(caps.aps);
     EXPECT_FALSE(caps.trigger);
     EXPECT_FALSE(caps.esp);
 
@@ -99,6 +106,12 @@ TEST(Aedat4Playback, RealFileGuiIntegration) {
     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     const bool eof1 = wait_for([&]() { return eof.load(); }, 30000);
     EXPECT_TRUE(eof1);
+
+    // Content/capability consistency after a full pass.
+    EXPECT_EQ(controller.source_capabilities().imu,
+              controller.imu_sample_count() > 0);
+    EXPECT_EQ(controller.source_capabilities().aps,
+              controller.aps_frame_count() > 0);
 
     // --- seek back to 0: replaying after EOF must run to EOF again -------
     // (EOF pauses the player; seek does not auto-resume — the user presses
@@ -161,7 +174,7 @@ TEST(Aedat4Playback, SideStreamsFeedControllerSlots) {
         writer.write(evs.data(), evs.data() + evs.size());
         for (int i = 0; i < 200; ++i) {
             gui::davis::ImuSample s;
-            s.t = 15000LL * i;
+            s.t = 10000LL * i;  // stays inside the event span (0..2 s)
             s.accel_x = -0.9F; s.accel_y = 0.2F; s.accel_z = 0.3F;
             s.gyro_x = 0.5F; s.gyro_y = 1.4F; s.gyro_z = -0.4F;
             s.temperature = 33.0F;
@@ -193,12 +206,95 @@ TEST(Aedat4Playback, SideStreamsFeedControllerSlots) {
     EXPECT_TRUE(aps.valid);
     EXPECT_EQ(aps.image.cols, 8);
     EXPECT_EQ(aps.image.rows, 4);
+
+    // Mid-playback: the drain is position-gated — only samples at or before
+    // the current playback position are served (the attitude animates with
+    // the playback instead of jumping to the end).
+    ASSERT_TRUE(wait_for([&]() {
+        return controller.file_playback_position_us() > 500000;  // past 0.5 s
+    }, 10000));
+    std::int64_t mid_cursor = std::numeric_limits<std::int64_t>::min();
+    const auto mid = controller.drain_imu(mid_cursor);
+    ASSERT_FALSE(mid.empty());
+    const Metavision::timestamp served_t = mid.back().t;
+    EXPECT_LE(served_t, controller.file_playback_position_us());
+    EXPECT_LT(served_t, 2000000);  // the recording runs ~2 s of IMU
+
+    // Let the playback run to the end, then check the late-consumer path.
+    ASSERT_TRUE(wait_for([&]() {
+        return controller.file_playback_position_us() >= 1990000;
+    }, 20000));
+
+    // A consumer attached AFTER the replay finished (e.g. the IMU window
+    // opened late) must still receive the retained samples — unlike live
+    // devices, a replay never delivers them again.
+    std::int64_t fresh = std::numeric_limits<std::int64_t>::min();
+    const auto backlog = controller.drain_imu(fresh);
+    EXPECT_GT(backlog.size(), 0u);
+    EXPECT_EQ(backlog.size(), 200u);  // the whole recording's IMU stream
     playback.set_camera(nullptr);
+}
+
+TEST(RecordDialog, SideStreamCheckboxes) {
+    gui::RecordDialog dialog;
+    dialog.set_aedat4_mode(true);
+    dialog.set_side_stream_capabilities(true, true);
+    dialog.show();
+    // Both available in AEDAT4 mode: visible and included by default.
+    EXPECT_TRUE(dialog.findChild<QCheckBox*>()->isVisibleTo(&dialog));
+    const auto boxes = dialog.findChildren<QCheckBox*>();
+    ASSERT_GE(boxes.size(), 3);  // biases + IMU + APS
+    QCheckBox* imu = nullptr;
+    QCheckBox* aps = nullptr;
+    QCheckBox* biases = nullptr;
+    for (QCheckBox* box : boxes) {
+        if (box->text().contains(QStringLiteral("IMU"))) imu = box;
+        else if (box->text().contains(QStringLiteral("APS"))) aps = box;
+        else if (box->text().contains(QStringLiteral("biases"))) biases = box;
+    }
+    ASSERT_NE(imu, nullptr);
+    ASSERT_NE(aps, nullptr);
+    ASSERT_NE(biases, nullptr);
+    EXPECT_TRUE(imu->isVisibleTo(&dialog));
+    EXPECT_TRUE(aps->isVisibleTo(&dialog));
+    EXPECT_TRUE(imu->isChecked());
+    EXPECT_TRUE(aps->isChecked());
+    EXPECT_TRUE(biases->isVisibleTo(&dialog));
+
+    // APS-less source (DVXplorer): only the IMU row shows.
+    dialog.set_side_stream_capabilities(true, false);
+    EXPECT_TRUE(imu->isVisibleTo(&dialog));
+    EXPECT_FALSE(aps->isVisibleTo(&dialog));
+
+    // Unchecking propagates through the confirm signal.
+    int imu_choice = -1, aps_choice = -1;
+    QObject::connect(&dialog, &gui::RecordDialog::start_recording,
+                     [&](const QString&, bool, bool i, bool a) {
+                         imu_choice = i ? 1 : 0;
+                         aps_choice = a ? 1 : 0;
+                     });
+    imu->setChecked(false);
+    aps->setChecked(false);
+    QPushButton* start_btn = nullptr;
+    const auto buttons = dialog.findChildren<QPushButton*>();
+    for (QPushButton* btn : buttons) {
+        if (btn->text() == QStringLiteral("Start")) start_btn = btn;
+    }
+    ASSERT_NE(start_btn, nullptr);
+    start_btn->click();  // default output path is prefilled — accepted
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    EXPECT_EQ(imu_choice, 0);
+    EXPECT_EQ(aps_choice, 0);
+
+    // RAW mode (Prophesee source): no side-stream rows at all.
+    dialog.set_aedat4_mode(false);
+    EXPECT_FALSE(imu->isVisibleTo(&dialog));
+    EXPECT_FALSE(aps->isVisibleTo(&dialog));
 }
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
-    QCoreApplication app(argc, argv);
+    QApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

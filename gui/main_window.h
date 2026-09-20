@@ -104,7 +104,8 @@ private slots:
 
     // Phase 3 — recording / playback.
     void on_record_start();
-    void do_record_start(const QString& path, bool save_biases);
+    void do_record_start(const QString& path, bool save_biases,
+                         bool include_imu, bool include_aps);
     void on_record_stop();
     void on_record_elapsed(std::chrono::seconds s);
 

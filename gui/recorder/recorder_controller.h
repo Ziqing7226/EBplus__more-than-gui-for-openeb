@@ -33,6 +33,13 @@ public:
     /// @brief Starts recording the live camera stream to @p path (RAW format).
     /// @return true on success.
     bool start(CameraController* controller, const QString& path);
+    /// @brief Side streams to include in an AEDAT4 recording (the record
+    /// dialog's checkboxes; both default to included). Takes effect at the
+    /// next start(); ignored for RAW recordings.
+    void set_include_side_streams(bool imu, bool aps) {
+        include_imu_ = imu;
+        include_aps_ = aps;
+    }
     /// @brief Starts processed-stream recording (Phase 2.5 step 5): writes
     /// the display-path-preprocessed events (filter/undistort/downsample as
     /// currently configured) instead of the SDK raw log. Falls back to raw
@@ -58,10 +65,13 @@ private:
     /// stop() tears the recording down on the GUI thread.
     bool aedat4_mode_{false};
     std::shared_ptr<Aedat4Writer> aedat4_writer_;
-    /// Side-stream state before the recording auto-enabled them — restored
-    /// on stop() so a recording never permanently changes the user's panel.
+    /// Side-stream panel state before the recording enabled the requested
+    /// streams — restored on stop() so a recording never permanently
+    /// changes the user's panel.
     bool imu_was_enabled_{false};
     bool aps_was_enabled_{false};
+    bool include_imu_{true};
+    bool include_aps_{true};
     QString path_;
     QTimer timer_;           ///< Emits elapsed() once per second.
     QTimer flush_timer_;     ///< Calls I_EventsStream::get_latest_raw_data() to flush buffers.

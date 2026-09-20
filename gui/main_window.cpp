@@ -871,6 +871,18 @@ void MainWindow::wire_signals() {
         settings_->devices_panel()->set_aps_available(caps.aps);
         set_aps_ui_state(camera_.aps_enabled());
     });
+    // AEDAT4 replay: side streams appear by content — when the reader
+    // decodes the first IMU/APS packet, check the box and open the window.
+    connect(&camera_, &CameraController::file_side_stream_discovered, this,
+            [this](bool imu) {
+                if (imu) {
+                    settings_->devices_panel()->set_imu_available(true);
+                    on_imu_toggled(true);
+                } else {
+                    settings_->devices_panel()->set_aps_available(true);
+                    on_aps_toggled(true);
+                }
+            });
     connect(&camera_, &CameraController::disconnected, this, [this]() {
         // Explicitly remove the CD callback before clearing the ID, so the
         // SDK data thread stops calling our lambda before any MainWindow
@@ -1574,17 +1586,21 @@ void MainWindow::on_record_start() {
             record_dialog_ = nullptr;
         });
         connect(record_dialog_, &RecordDialog::start_recording, this,
-                [this](const QString& path, bool save_biases) {
-                    do_record_start(path, save_biases);
+                [this](const QString& path, bool save_biases, bool include_imu,
+                       bool include_aps) {
+                    do_record_start(path, save_biases, include_imu, include_aps);
                 });
     }
     record_dialog_->set_aedat4_mode(camera_.is_inivation_source());
+    const auto caps = camera_.source_capabilities();
+    record_dialog_->set_side_stream_capabilities(caps.imu, caps.aps);
     record_dialog_->show();
     record_dialog_->raise();
     record_dialog_->activateWindow();
 }
 
-void MainWindow::do_record_start(const QString& path, bool save_biases) {
+void MainWindow::do_record_start(const QString& path, bool save_biases,
+                                 bool include_imu, bool include_aps) {
     // Save the current bias configuration alongside the RAW recording so
     // the file is reproducible — the event stream depends on the bias
     // settings at record time (matching Metavision Viewer behavior).
@@ -1608,6 +1624,7 @@ void MainWindow::do_record_start(const QString& path, bool save_biases) {
     // Processed-stream recording (Phase 2.5 step 5): when any conditioning
     // stage is active, record the PROCESSED event stream (what the display
     // sees); otherwise keep the SDK raw log.
+    recorder_.set_include_side_streams(include_imu, include_aps);
     auto* fp = camera_.frame_pipeline();
     if (fp && camera_.conditioner_active()) {
         recorder_.start_processed(&camera_, path, fp);

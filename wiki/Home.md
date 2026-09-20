@@ -25,7 +25,7 @@ EB plus gives you a complete desktop workflow for event-camera data: real-time v
 - **Algorithms**: 25 registered (filtering, motion, detection, tracking, reconstruction, analytics, visualization) + the Intrinsic Wizard calibration tool
 - **E2VID**: Deep-learning event-to-video reconstruction via ONNX Runtime, with optional Intel iGPU acceleration via OpenVINO (default mode)
 - **inivation streams**: IMU 3D-attitude window, APS grayscale preview with automatic exposure, hardware ROI, per-model bias maps and Auto Bias
-- **Recording**: Prophesee → RAW; inivation → DV-native AEDAT4 that automatically includes IMU samples and (on DAVIS) APS frames — replays show them like a live camera
+- **Recording**: Prophesee → RAW; inivation → DV-native AEDAT4 — the record dialog lets you include IMU samples and (on DAVIS) APS frames (both on by default), and replays show them like a live camera
 - **Themes**: 5 colors × 3 modes (Follow System / Light / Dark)
 - **License**: MIT (original code) + Apache 2.0 (openEB SDK; inivation device layer ported from dv-processing, Apache 2.0) — see the README for third-party notices
 

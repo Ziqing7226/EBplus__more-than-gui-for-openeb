@@ -80,6 +80,9 @@ public:
     virtual bool has_aps() const { return false; }
     virtual void set_imu_sink(ImuSink) {}
     virtual void set_aps_sink(ApsSink) {}
+    /// First actual IMU(true)/APS(false) packet decoded — presence by
+    /// content (declarations in the file header can over-report).
+    virtual void set_side_stream_discovered(std::function<void(bool)>) {}
 
     const ExternalFileMeta& meta() const { return meta_; }
 

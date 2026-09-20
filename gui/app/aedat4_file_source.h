@@ -31,6 +31,12 @@ public:
     bool has_aps() const override { return has_aps_; }
     void set_imu_sink(ImuSink sink) override { imu_sink_ = std::move(sink); }
     void set_aps_sink(ApsSink sink) override { aps_sink_ = std::move(sink); }
+    /// Invoked on the reader thread the first time an IMU / APS packet is
+    /// actually decoded (true = IMU, false = APS) — side-stream presence by
+    /// content, not by stream declaration.
+    void set_side_stream_discovered(std::function<void(bool)> fn) {
+        side_stream_discovered_ = std::move(fn);
+    }
 
 private:
     struct PacketInfo {
@@ -57,6 +63,12 @@ private:
     bool has_aps_{false};
     ImuSink imu_sink_;
     ApsSink aps_sink_;
+    std::function<void(bool)> side_stream_discovered_;
+    /// Shared normalization clock (first timestamp of the file); IMU
+    /// samples decoded before the first event wait here for it.
+    bool ev_t0_known_{false};
+    std::int64_t ev_t0_{0};
+    std::vector<davis::ImuSample> imu_pending_norm_;
 
     void decode_imu_body(const std::uint8_t* pd, std::size_t pn);
     void decode_frame_body(const std::uint8_t* pd, std::size_t pn);

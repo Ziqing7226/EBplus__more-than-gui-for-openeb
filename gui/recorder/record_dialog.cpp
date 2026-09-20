@@ -45,6 +45,17 @@ RecordDialog::RecordDialog(QWidget* parent) : QDialog(parent) {
            "so the recording is reproducible (best-effort, like Metavision Viewer)."));
     form->addRow(QString(), chk_biases_);
 
+    // Side streams (AEDAT4 recordings only; visible only for sources that
+    // actually have the stream — set_side_stream_capabilities).
+    chk_imu_ = new QCheckBox(tr("Include IMU samples"), this);
+    chk_imu_->setChecked(true);
+    chk_imu_->setVisible(false);
+    form->addRow(QString(), chk_imu_);
+    chk_aps_ = new QCheckBox(tr("Include APS frames"), this);
+    chk_aps_->setChecked(true);
+    chk_aps_->setVisible(false);
+    form->addRow(QString(), chk_aps_);
+
     lbl_status_ = new QLabel(tr("Recording starts the live camera's RAW event log."), this);
     lbl_status_->setWordWrap(true);
     lbl_status_->setProperty("class", "hint");
@@ -66,6 +77,7 @@ RecordDialog::RecordDialog(QWidget* parent) : QDialog(parent) {
 
 void RecordDialog::set_aedat4_mode(bool on) {
     aedat4_ = on;
+    if (chk_imu_) update_side_stream_rows();
     const QString suffix = suffix_for(on);
     QString path = edt_output_->text();
     if (!path.isEmpty()) {
@@ -79,6 +91,20 @@ void RecordDialog::set_aedat4_mode(bool on) {
         ? tr("Recording writes the inivation camera's raw event stream into an "
              "AEDAT4 (DV-format) file.")
         : tr("Recording starts the live camera's RAW event log."));
+    if (chk_imu_) update_side_stream_rows();
+}
+
+void RecordDialog::set_side_stream_capabilities(bool imu, bool aps) {
+    cap_imu_ = imu;
+    cap_aps_ = aps;
+    if (chk_imu_) update_side_stream_rows();
+}
+
+void RecordDialog::update_side_stream_rows() {
+    // Side-stream rows exist only for AEDAT4 recordings of sources that
+    // actually have the stream (checked by default = include).
+    chk_imu_->setVisible(aedat4_ && cap_imu_);
+    chk_aps_->setVisible(aedat4_ && cap_aps_);
 }
 
 void RecordDialog::on_browse() {
@@ -103,7 +129,8 @@ void RecordDialog::on_start() {
     // Create the output directory if needed (the timestamped default lives
     // in ~/Documents/EBplus/recordings which may not exist yet).
     QDir().mkpath(QFileInfo(path).absolutePath());
-    emit start_recording(path, chk_biases_->isChecked());
+    emit start_recording(path, chk_biases_->isChecked(),
+                         chk_imu_->isChecked(), chk_aps_->isChecked());
     accept();
 }
 
