@@ -172,20 +172,15 @@ Camera (HAL) → I_EventsStream callback → StreamConditioner
 ### inivation DAVIS / DVXplorer mode
 
 ```
-USB bulk transfers → davis/dvxplorer Parser (USB decode thread)
-    → raw_consumer (AEDAT4 recording tap — pre-queue, never dropped)
-    → BatchWorker queue (bounded, drop-oldest) → worker thread
-    → StreamConditioner → FramePipeline / display / AlgoBridge
-IMU words + APS pixels decode INLINE on the USB thread and feed the
-controller ring / APS slots directly (latency-critical, never queued).
+USB stream → wire decoder → event processing → display / algorithms
+IMU samples and APS frames decode on the side and feed their windows
+directly (always current, never delayed by the event flood).
 ```
 
-- One conditioning pass per source: unified ROI → polarity stages → noise
-  filter → thinning → undistort → flips; every consumer shares the output.
-- The DAVIS hardware ROI filter and the DVS ROI register writes mirror the
-  unified ROI set from the GUI.
-- The Auto Bias controller measures the RAW stream (biases act before any
-  conditioning) and applies bias deltas on the GUI thread.
+- Events are conditioned once (ROI, filters, noise, undistort, flips) and
+  every consumer shares that output.
+- Recordings tap the decoded stream before display processing, so a file
+  always contains the complete sensor output (events + IMU + APS).
 
 ### File playback mode
 
@@ -206,8 +201,8 @@ AEDAT4 / ALPDATA    → external source reader thread → FramePipeline buffer
 
 - **GUI thread** — all panel interaction, display rendering, most algorithm processing.
 - **SDK data thread** — openEB event-stream callback (FramePipeline). FilterChain is mutex-protected.
-- **USB decode thread** (inivation devices) — libusb event handling + wire decoding; IMU/APS sinks and the recording tap run here.
-- **Batch worker thread** (inivation devices) — runs the per-batch pipeline (conditioning, statistics, display push) off the USB thread; the queue is bounded and drops the oldest batch under a flood.
+- **USB decode thread** (inivation devices) — receives camera data and decodes it; IMU/APS samples and the recording feed run here so they stay real-time.
+- **Event processing thread** (inivation devices) — runs the display/algorithm pipeline so heavy processing can never delay the camera data.
 - **External file reader thread** — decodes AEDAT4/ALPDATA files into the playback buffer.
 - **Async worker thread** — used by `AlgoInstance` for slow online-camera algorithms; discards stale batches.
 - **File converter thread** — background RAW/HDF5/CSV conversion (`file_converter.cpp`).

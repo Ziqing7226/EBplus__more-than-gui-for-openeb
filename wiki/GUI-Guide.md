@@ -115,7 +115,7 @@ Not a menu item, but related: in the **Algorithms** panel's Preprocessing group,
 ## Recording & Playback
 
 - **Prophesee / CenturyArks** — record to `.raw` (SDK RAW format).
-- **inivation DAVIS / DVXplorer** — record to **AEDAT4** (DV-native): the file carries the event stream plus the IMU samples and (DAVIS) APS frames.
+- **inivation DAVIS / DVXplorer** — record to **AEDAT4** (opens in DV and other inivation tools): the recording automatically includes the event stream, the IMU samples and (on DAVIS) the APS frames — no checkboxes needed.
 - **Playback** — open `.raw`, `.aedat4` and `.alpdata` files; speed control, seek, pause/resume, position tracking. Playback window displays integer microseconds (no scientific notation); playback rate shows 6 decimal places.
 - **AEDAT4 replay visualization** — a recording that contains IMU samples and/or APS frames shows the same **IMU stream** / **APS frames** checkboxes (Devices panel) as a live camera; the IMU and APS windows work against the replayed data exactly as against hardware.
 - **Loop playback** — cyclic playback; algorithm temporal state resets on each loop to avoid frozen output.
@@ -143,8 +143,8 @@ Available from the File Tools panel:
 ## Multi-Window
 
 - **XYT 3D point cloud** — GPU-accelerated 3D event visualization (`SpaceTimeDisplay`, VBO + GLSL).
-- **IMU window** (inivation cameras and AEDAT4 replays with an IMU stream) — accel/gyro/temperature readouts plus a 3D attitude view: a camera-shaped cuboid drawn in the estimated orientation. The attitude comes from a gyro-dominant estimator (dv-processing-style constant gyro offset + a weak gravity anchor at rest): the first near-1 g sample aligns instantly, the bias converges by itself over the first seconds while the camera rests, motion is tracked purely by the gyro (closed paths return), and yaw drifts slowly by physics — a 6-axis IMU has no compass.
-- **APS window** (DAVIS cameras and AEDAT4 replays with frames) — grayscale frame preview with **automatic exposure** (reference-style under/over-exposure correction; the applied exposure is written back to the sensor).
+- **IMU window** (inivation cameras and AEDAT4 replays containing IMU samples) — acceleration/gyroscope/temperature readouts plus a live 3D view of the camera orientation (a cuboid you can see tilt and turn with the camera). Just open the window while the camera rests: orientation is ready immediately, the sensor fine-tunes itself over the first seconds, movements are followed in real time and a closed path returns to where it started. Yaw (rotation around the vertical axis) drifts slowly over minutes — a 6-axis IMU has no compass, every device behaves this way.
+- **APS window** (DAVIS cameras and AEDAT4 replays containing frames) — live grayscale preview with automatic exposure: point at something too dark or too bright and the exposure adjusts by itself.
 - **Algorithm display windows** — `AlgoWindow` dockable windows showing algorithm title + output only (no parameters — those live in the sidebar).
 - **Layout persistence** — save/restore dock geometry and window positions to JSON (View → Save/Load Layout).
 
