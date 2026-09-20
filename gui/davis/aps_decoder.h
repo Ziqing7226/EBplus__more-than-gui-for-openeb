@@ -168,8 +168,6 @@ public:
             frame.t = exposure_us_;
             frame.x = roi_x_;
             frame.y = roi_y_;
-            frame.width = pixels_.cols;
-            frame.height = pixels_.rows;
             static const bool raw_dump =
                 std::getenv("EBPLUS_APS_RAW") != nullptr;
             dbg_ = std::getenv("EBPLUS_APS_DEBUG") != nullptr;
@@ -208,6 +206,10 @@ public:
             } else {
                 frame.image = pixels_.clone();
             }
+            // Declared dims follow the FINAL image (the CDAVIS RGBW
+            // demosaic crops odd-sized ROIs to even before upsampling).
+            frame.width = frame.image.cols;
+            frame.height = frame.image.rows;
             frame.valid = true;
             if (sink_) sink_(frame);
         }
