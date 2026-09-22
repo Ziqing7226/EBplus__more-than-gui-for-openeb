@@ -202,6 +202,12 @@ TEST(Aedat4Playback, SideStreamsFeedControllerSlots) {
     EXPECT_TRUE(wait_for([&]() { return controller.imu_sample_count() > 0; }, 15000));
     EXPECT_GT(controller.imu_sample_count(), 0);
     EXPECT_TRUE(wait_for([&]() { return controller.aps_frame_count() > 0; }, 15000));
+    // The replay serves APS frames POSITION-GATED: the recorded frame
+    // (t = 5 ms) appears once the playback position passes it.
+    EXPECT_TRUE(wait_for([&]() {
+        const auto f = controller.latest_aps_frame();
+        return f.valid && f.image.cols == 8;
+    }, 15000));
     const auto aps = controller.latest_aps_frame();
     EXPECT_TRUE(aps.valid);
     EXPECT_EQ(aps.image.cols, 8);

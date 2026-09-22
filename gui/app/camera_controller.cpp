@@ -906,11 +906,25 @@ bool CameraController::aps_enabled() const {
 #endif
 }
 
-davis::ApsFrame CameraController::latest_aps_frame() const {
+davis::ApsFrame CameraController::latest_aps_frame() {
 #if GUI_HAVE_DAVIS
+    // File replay: serve the frame matching the playback position (the
+    // recorded frames decode in one burst, so a plain "latest" would pin
+    // the window to the recording's final frame).
+    if (external_source_) {
+        // Before the first frame's position: nothing to show (the window
+        // keeps its previous content until a valid frame arrives).
+        davis::ApsFrame f;
+        if (external_source_->read_aps_frame_for_position(
+                file_playback_position_us(), f)) {
+            return f;
+        }
+        return {};
+    }
     std::lock_guard<std::mutex> lock(aps_mutex_);
     return aps_latest_;
 #else
+    (void)this;
     return {};
 #endif
 }

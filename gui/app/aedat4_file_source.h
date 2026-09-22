@@ -38,6 +38,11 @@ public:
         side_stream_discovered_ = std::move(fn);
     }
 
+    /// Position-gated frame for replay: decodes the APS packet nearest at
+    /// or before @p position_us using the packet index built during open().
+    bool read_aps_frame_for_position(std::int64_t position_us,
+                                     davis::ApsFrame& out) override;
+
 private:
     struct PacketInfo {
         std::int64_t byte_offset{0}; // packet body (after the 8-byte header)
@@ -68,10 +73,27 @@ private:
     /// samples decoded before the first event wait here for it.
     bool ev_t0_known_{false};
     std::int64_t ev_t0_{0};
+public:
+    bool ev_t0_known() const { return ev_t0_known_; }
+    std::int64_t ev_t0() const { return ev_t0_; }
+private:
     std::vector<davis::ImuSample> imu_pending_norm_;
 
     void decode_imu_body(const std::uint8_t* pd, std::size_t pn);
-    void decode_frame_body(const std::uint8_t* pd, std::size_t pn);
+    void decode_frame_body(const std::uint8_t* pd, std::size_t pn,
+                           davis::ApsFrame* out = nullptr);
+
+    /// APS packet index for position-gated replay: (recorded timestamp,
+    /// packet header offset) — built arithmetically during parse_data_table
+    /// (the FTAB lists every packet's size, so offsets are cumulative).
+    struct ApsIndexEntry {
+        std::int64_t t{0};
+        std::streamoff offset{0};
+    };
+    std::vector<ApsIndexEntry> aps_index_;
+    std::ifstream aps_read_;          // dedicated handle (GUI-thread reads)
+    std::int64_t aps_served_ts_{-1};  // raw ts of the last served packet
+    davis::ApsFrame aps_served_;
 };
 
 } // namespace gui

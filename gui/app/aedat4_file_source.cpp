@@ -317,6 +317,11 @@ void Aedat4FileSource::parse_data_table(std::ifstream& file, std::streamoff pos)
     std::int64_t total = 0;
     std::int64_t ts_min = std::numeric_limits<std::int64_t>::max();
     std::int64_t ts_max = std::numeric_limits<std::int64_t>::min();
+    // The FTAB lists every packet in file order with its body size, so the
+    // packet header offsets are purely cumulative from the first packet —
+    // an APS (timestamp, offset) index falls out arithmetically, no I/O.
+    std::streamoff cursor = first_packet_offset_;
+    aps_index_.clear();
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::size_t slot = vec + 4 + 4 * i;
         const std::uint32_t rel = fb.u32(slot);
@@ -326,19 +331,25 @@ void Aedat4FileSource::parse_data_table(std::ifstream& file, std::streamoff pos)
         const std::size_t info = fb.field(entry, 6);
         if (info == 0 || !fb.valid(info, 8)) return;
         const std::int32_t sid = fb.i32(info);
+        const std::int32_t psize = fb.i32(info + 4);
+        const std::int64_t ts0 = fb.scalar<std::int64_t>(entry, 10, 0);
+        const std::int64_t ts1 = fb.scalar<std::int64_t>(entry, 12, 0);
         // Side-stream presence follows the ACTUAL packet content, not the
         // XML declaration (writers may declare streams they never filled —
         // e.g. a DVXplorer recording declares FRME it cannot produce).
         if (stream_is_imu_[sid]) has_imu_ = true;
-        if (stream_is_aps_[sid]) has_aps_ = true;
+        if (stream_is_aps_[sid]) {
+            has_aps_ = true;
+            if (psize > 0) aps_index_.push_back({ts0, cursor});
+        }
         auto it = stream_is_events_.find(sid);
-        if (it == stream_is_events_.end() || !it->second) continue;
-        const std::int64_t n = fb.scalar<std::int64_t>(entry, 8, 0);
-        const std::int64_t ts0 = fb.scalar<std::int64_t>(entry, 10, 0);
-        const std::int64_t ts1 = fb.scalar<std::int64_t>(entry, 12, 0);
-        total += n;
-        ts_min = std::min(ts_min, ts0);
-        ts_max = std::max(ts_max, ts1);
+        if (it != stream_is_events_.end() && it->second) {
+            const std::int64_t n = fb.scalar<std::int64_t>(entry, 8, 0);
+            total += n;
+            ts_min = std::min(ts_min, ts0);
+            ts_max = std::max(ts_max, ts1);
+        }
+        cursor += 8 + static_cast<std::streamoff>(psize);
     }
     if (total > 0 && ts_max >= ts_min) {
         meta_.worst_case_events = total;
@@ -389,8 +400,9 @@ void Aedat4FileSource::decode_imu_body(const std::uint8_t* pd, std::size_t pn) {
     }
 }
 
-void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn) {
-    if (pn < 8 || !aps_sink_) return;
+void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn,
+                                         davis::ApsFrame* out) {
+    if (pn < 8 || (!aps_sink_ && !out)) return;
     const std::uint32_t declared = [&] {
         std::uint32_t v; std::memcpy(&v, pd, 4); return v; }();
     if (declared < 8 || declared > pn) return;
@@ -428,7 +440,65 @@ void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn)
     frame.image = cv::Mat(h, w, channels == 3 ? CV_8UC3 : CV_8UC1);
     std::memcpy(frame.image.data, pd + 4 + vec + 4, count);
     frame.valid = true;
-    aps_sink_(frame);
+    if (out) *out = std::move(frame);
+    else aps_sink_(frame);
+}
+
+bool Aedat4FileSource::read_aps_frame_for_position(std::int64_t position_us,
+                                                   davis::ApsFrame& out) {
+    if (aps_index_.empty() || !ev_t0_known_) return false;
+    const std::int64_t target = position_us + ev_t0_;
+    if (target < aps_index_.front().t) {
+        aps_served_ts_ = -1;
+        aps_served_ = {};
+        return false;
+    }
+    // Newest packet at or before the target.
+    std::size_t lo = 0, hi = aps_index_.size();
+    while (lo + 1 < hi) {
+        const std::size_t mid = (lo + hi) / 2;
+        if (aps_index_[mid].t <= target) lo = mid;
+        else hi = mid;
+    }
+    if (aps_index_[lo].t == aps_served_ts_ && !aps_served_.image.empty()) {
+        out = aps_served_;  // position unchanged since the last query
+        return true;
+    }
+    // Decode that one packet (its header is re-read for the exact size).
+    if (!aps_read_.is_open()) {
+        aps_read_.open(path_, std::ios::binary);
+        if (!aps_read_) return false;
+    }
+    aps_read_.clear();
+    aps_read_.seekg(aps_index_[lo].offset);
+    std::uint8_t header[8];
+    if (!read_exact(aps_read_, header, 8)) return false;
+    const std::uint32_t size =
+        static_cast<std::uint32_t>(header[4]) |
+        (static_cast<std::uint32_t>(header[5]) << 8) |
+        (static_cast<std::uint32_t>(header[6]) << 16) |
+        (static_cast<std::uint32_t>(header[7]) << 24);
+    if (size == 0 || size > kMaxPacketBytes) return false;
+    std::vector<std::uint8_t> body(size);
+    if (!read_exact(aps_read_, body.data(), size)) return false;
+    const std::uint8_t* pd = body.data();
+    std::size_t pn = size;
+    std::vector<std::uint8_t> plain;
+    if (compression_ != 0) {
+        plain.clear();
+        std::string lz4_err;
+        if (!lz4_decompress_frame(pd, pn, plain, lz4_err)) return false;
+        if (plain.size() < 8) return false;
+        pd = plain.data();
+        pn = plain.size();
+    }
+    davis::ApsFrame frame;
+    decode_frame_body(pd, pn, &frame);
+    if (!frame.valid) return false;
+    aps_served_ts_ = aps_index_[lo].t;
+    aps_served_ = frame;
+    out = std::move(frame);
+    return true;
 }
 
 void Aedat4FileSource::run(EventSink sink, DoneFn done) {

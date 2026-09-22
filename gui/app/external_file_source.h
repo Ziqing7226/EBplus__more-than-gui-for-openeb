@@ -83,6 +83,15 @@ public:
     /// First actual IMU(true)/APS(false) packet decoded — presence by
     /// content (declarations in the file header can over-report).
     virtual void set_side_stream_discovered(std::function<void(bool)>) {}
+    /// Position-gated APS frame for replay: returns the newest frame whose
+    /// timestamp is at or before @p position_us (normalized stream time).
+    /// Default: not supported (sources without an APS index).
+    virtual bool read_aps_frame_for_position(std::int64_t position_us,
+                                             davis::ApsFrame& out) {
+        (void)position_us;
+        (void)out;
+        return false;
+    }
 
     const ExternalFileMeta& meta() const { return meta_; }
 

@@ -204,7 +204,10 @@ public:
     bool set_aps_enabled(bool on);
     [[nodiscard]] bool aps_enabled() const;
     /// Latest completed APS frame (cloned under the mutex).
-    davis::ApsFrame latest_aps_frame() const;
+    /// Live mode: the newest decoded frame. File replay: the newest frame
+    /// at or before the playback position (decoded on demand from the
+    /// file's APS packet index).
+    davis::ApsFrame latest_aps_frame();
     [[nodiscard]] long aps_frame_count() const;
     /// @brief IMU plotting (Phase 2 visualization): drains the retained
     /// sample ring after @p cursor (sequence numbers from
