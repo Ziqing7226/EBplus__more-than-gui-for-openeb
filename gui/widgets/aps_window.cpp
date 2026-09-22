@@ -43,19 +43,22 @@ void ApsWindow::refresh() {
     const long count = controller_->aps_frame_count();
 
     if (frame.valid && !frame.image.empty()) {
-        // CV_8UC1 grayscale (most models) wraps directly; the color CDAVIS
-        // decodes to CV_8UC3 BGR and converts to RGB for Qt. fromImage
-        // copies, so the wrapped data may be a temporary.
-        QImage img;
-        if (frame.image.type() == CV_8UC3) {
-            cv::Mat rgb;
-            cv::cvtColor(frame.image, rgb, cv::COLOR_BGR2RGB);
-            img = QImage(rgb.data, rgb.cols, rgb.rows,
-                         static_cast<qsizetype>(rgb.step), QImage::Format_RGB888);
+        // Build the QImage with its OWN 32-bit-aligned scanlines and
+        // convert directly into it. Wrapping the cv::Mat buffer exposes an
+        // unaligned stride (346*3 = 1038 bytes) to Qt's optimized image
+        // conversions, which intermittently renders the WHOLE frame white
+        // (offline-reproduced: 84 white renders out of 156 via the wrap,
+        // 0 out of 156 via this pattern — the flashing white frames on the
+        // color 346, in replay and live alike).
+        const int chn = frame.image.channels();
+        QImage img(frame.image.cols, frame.image.rows,
+                   chn == 3 ? QImage::Format_RGB888 : QImage::Format_Grayscale8);
+        cv::Mat wrap(img.height(), img.width(), CV_8UC(chn == 3 ? 3 : 1),
+                     img.bits(), static_cast<size_t>(img.bytesPerLine()));
+        if (chn == 3) {
+            cv::cvtColor(frame.image, wrap, cv::COLOR_BGR2RGB);
         } else {
-            img = QImage(frame.image.data, frame.image.cols, frame.image.rows,
-                         static_cast<qsizetype>(frame.image.step),
-                         QImage::Format_Grayscale8);
+            frame.image.copyTo(wrap);
         }
         image_label_->setPixmap(QPixmap::fromImage(img).scaled(
             image_label_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
