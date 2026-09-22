@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
@@ -609,6 +610,14 @@ void Device::usb_control_out_noblock(std::uint8_t request, std::uint16_t value,
 }
 
 void Device::apply_auto_exposure(const davis::ApsFrame& frame) {
+    // Diagnostics: EBPLUS_APS_AEC_TRACE=1 prints the exposure trajectory.
+    static const bool aec_trace = std::getenv("EBPLUS_APS_AEC_TRACE") != nullptr;
+    static std::int64_t last_trace_t = -1000000;
+    if (aec_trace && frame.t - last_trace_t >= 500000) {
+        last_trace_t = frame.t;
+        std::fprintf(stderr, "[aec] t=%lld us  exposure=%.0f us\n",
+                     static_cast<long long>(frame.t), aec_exposure_us_);
+    }
     // The decision law lives in the unit-tested pure helper (ported from the
     // reference computeAutomaticExposure); this method only programs it.
     // The reference meters GRAYSCALE — "we only do auto-exposure on
@@ -804,6 +813,11 @@ void Device::configure_idle() {
         spi_config_send(MODULE_APS, APS_GSTXFALL, 100);
         spi_config_send(MODULE_APS, APS_GSFDRESET, 300);
     }
+    // Reference init: setExposureDuration(20 ms). Without an initial value
+    // the camera streams at its firmware-default exposure until the AEC
+    // converges (the color 346 flashed saturated frames during that window
+    // on a fresh power-on).
+    spi_config_send(MODULE_APS, APS_EXPOSURE, exposure_ticks(20000.0, adc_clock_));
     spi_config_send(MODULE_APS, APS_RUN, false);
     spi_config_send(MODULE_APS, APS_START_COLUMN_0, 0);
     spi_config_send(MODULE_APS, APS_START_ROW_0, 0);
