@@ -13,6 +13,7 @@ namespace gui {
 
 ApsWindow::ApsWindow(CameraController* controller, QWidget* parent)
     : QDockWidget(tr("APS Frames"), parent), controller_(controller) {
+    setObjectName("ApsDock");
     setAttribute(Qt::WA_DeleteOnClose);
     setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable |
                 QDockWidget::DockWidgetFloatable);

@@ -71,6 +71,7 @@ private:
 
 ImuWindow::ImuWindow(CameraController* controller, QWidget* parent)
     : QDockWidget(tr("IMU Stream"), parent), controller_(controller) {
+    setObjectName("ImuDock");
     setAttribute(Qt::WA_DeleteOnClose);
     setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable |
                 QDockWidget::DockWidgetFloatable);
