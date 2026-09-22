@@ -12,22 +12,25 @@
 namespace gui {
 
 ApsWindow::ApsWindow(CameraController* controller, QWidget* parent)
-    : QWidget(parent, Qt::Window), controller_(controller) {
-    setWindowTitle(tr("APS Frames"));
+    : QDockWidget(tr("APS Frames"), parent), controller_(controller) {
     setAttribute(Qt::WA_DeleteOnClose);
-    setMinimumSize(360, 300);
+    setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable |
+                QDockWidget::DockWidgetFloatable);
+    setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
 
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(8, 8, 8, 8);
+    auto* content = new QWidget(this);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(8, 8, 8, 8);  // the narrow gap around the preview
+    setWidget(content);
 
     // Grayscale preview, scaled to fit while preserving aspect ratio.
-    image_label_ = new QLabel(this);
+    image_label_ = new QLabel(content);
     image_label_->setAlignment(Qt::AlignCenter);
     image_label_->setMinimumSize(340, 240);
     image_label_->setStyleSheet(QStringLiteral("background: black;"));
     layout->addWidget(image_label_, 1);
 
-    status_label_ = new QLabel(this);
+    status_label_ = new QLabel(content);
     layout->addWidget(status_label_);
 
     timer_ = new QTimer(this);
@@ -93,7 +96,7 @@ void ApsWindow::refresh() {
 
 void ApsWindow::closeEvent(QCloseEvent* event) {
     emit window_closed();
-    QWidget::closeEvent(event);
+    QDockWidget::closeEvent(event);
 }
 
 } // namespace gui

@@ -11,11 +11,11 @@
 #ifndef GUI_WIDGETS_IMU_WINDOW_H
 #define GUI_WIDGETS_IMU_WINDOW_H
 
+#include <QDockWidget>
 #include <QElapsedTimer>
 #include <QString>
 
 #include <limits>
-#include <QWidget>
 
 #include "davis/imu_pose.h"
 #include "davis/imu_types.h"
@@ -26,7 +26,9 @@ namespace gui {
 
 class CameraController;
 
-class ImuWindow : public QWidget {
+/// Dockable window (AlgoWindow style, right dock area): the camera drawn
+/// as a cuboid whose pose follows the IMU, with numeric readouts.
+class ImuWindow : public QDockWidget {
     Q_OBJECT
 public:
     explicit ImuWindow(CameraController* controller, QWidget* parent = nullptr);
@@ -38,13 +40,15 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
-    void paintEvent(QPaintEvent* event) override;
 
 private:
     void refresh();
-    /// Draws the camera cuboid + body axes in the current pose.
-    void draw_pose(QPainter& p, const QRectF& r);
+    /// Renders the status line, the camera cuboid and the body axes into
+    /// the dock's content canvas (invoked by the canvas's paintEvent).
+    void render(QPainter& p, const QRectF& r);
 
+    class Canvas;
+    Canvas* canvas_;
     CameraController* controller_;
     QTimer* timer_;
     /// Status line, drawn inside the pose canvas (no themed label strip).

@@ -10,6 +10,7 @@
 
 #include <QPainter>
 #include <QTimer>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
@@ -50,14 +51,37 @@ void qrotate(const Q4& q, double& x, double& y, double& z) {
 
 } // namespace
 
-ImuWindow::ImuWindow(CameraController* controller, QWidget* parent)
-    : QWidget(parent, Qt::Window), controller_(controller) {
-    setWindowTitle(tr("IMU Stream"));
-    setAttribute(Qt::WA_DeleteOnClose);
-    setMinimumSize(520, 620);
+/// The dock's content: everything is hand-painted here (pose canvas +
+/// status line + numeric readout) — no child widgets, no themed strips.
+class ImuWindow::Canvas : public QWidget {
+public:
+    explicit Canvas(ImuWindow* win) : QWidget(win), win_(win) {
+        setMinimumSize(360, 420);
+    }
 
-    // Everything is hand-painted in paintEvent (pose canvas + status line +
-    // numeric readout) — no child widgets, no themed label backgrounds.
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        win_->render(p, QRectF(rect()));
+    }
+
+private:
+    ImuWindow* win_;
+};
+
+ImuWindow::ImuWindow(CameraController* controller, QWidget* parent)
+    : QDockWidget(tr("IMU Stream"), parent), controller_(controller) {
+    setAttribute(Qt::WA_DeleteOnClose);
+    setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable |
+                QDockWidget::DockWidgetFloatable);
+    setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+
+    auto* content = new QWidget(this);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(8, 8, 8, 8);  // the narrow gap around the canvas
+    canvas_ = new Canvas(this);
+    layout->addWidget(canvas_, 1);
+    setWidget(content);
 
     // 30 Hz pull: drain new samples from the controller ring (thread-safe),
     // integrate the pose, repaint.
@@ -116,10 +140,10 @@ void ImuWindow::refresh() {
                                    .arg(count)
                                    .arg(smoothed_rate_, 5, 'f', 1);
     }
-    update();
+    canvas_->update();
 }
 
-void ImuWindow::draw_pose(QPainter& p, const QRectF& r) {
+void ImuWindow::render(QPainter& p, const QRectF& r) {
     p.fillRect(r, QColor(16, 18, 22));
     p.setPen(QColor(70, 70, 78));
     p.drawRect(r);
@@ -263,18 +287,9 @@ void ImuWindow::draw_pose(QPainter& p, const QRectF& r) {
                    .arg(latest.temperature, 0, 'f', 1));
 }
 
-void ImuWindow::paintEvent(QPaintEvent*) {
-    QPainter p(this);
-    p.fillRect(rect(), QColor(12, 12, 14));
-
-    const QRectF pose(rect().left() + 8, rect().top() + 8, rect().width() - 16,
-                      rect().height() - 16);
-    draw_pose(p, pose);
-}
-
 void ImuWindow::closeEvent(QCloseEvent* event) {
     emit window_closed();
-    QWidget::closeEvent(event);
+    QDockWidget::closeEvent(event);
 }
 
 } // namespace gui

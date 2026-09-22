@@ -7,7 +7,7 @@
 
 #include <QElapsedTimer>
 #include <QLabel>
-#include <QWidget>
+#include <QDockWidget>
 
 class QTimer;
 
@@ -15,7 +15,9 @@ namespace gui {
 
 class CameraController;
 
-class ApsWindow : public QWidget {
+/// Dockable window (AlgoWindow style, right dock area): the live APS
+/// frame preview.
+class ApsWindow : public QDockWidget {
     Q_OBJECT
 public:
     explicit ApsWindow(CameraController* controller, QWidget* parent = nullptr);

@@ -2374,6 +2374,14 @@ void MainWindow::on_imu_toggled(bool on) {
                 camera_.set_imu_enabled(false);
                 set_imu_ui_state(false);
             });
+            addDockWidget(Qt::RightDockWidgetArea, imu_window_);
+            // When the APS preview is already docked on the side, stack
+            // this one BELOW it (top/bottom halves separated by the dock
+            // splitter's narrow gap).
+            if (aps_window_ && !aps_window_->isFloating() &&
+                dockWidgetArea(aps_window_) == Qt::RightDockWidgetArea) {
+                splitDockWidget(aps_window_, imu_window_, Qt::Vertical);
+            }
         }
         imu_window_->show();
         imu_window_->raise();
@@ -2401,6 +2409,11 @@ void MainWindow::on_aps_toggled(bool on) {
                 camera_.set_aps_enabled(false);
                 set_aps_ui_state(false);
             });
+            addDockWidget(Qt::RightDockWidgetArea, aps_window_);
+            if (imu_window_ && !imu_window_->isFloating() &&
+                dockWidgetArea(imu_window_) == Qt::RightDockWidgetArea) {
+                splitDockWidget(imu_window_, aps_window_, Qt::Vertical);
+            }
         }
         aps_window_->show();
         aps_window_->raise();
