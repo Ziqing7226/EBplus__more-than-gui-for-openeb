@@ -878,9 +878,13 @@ void MainWindow::wire_signals() {
                 if (imu) {
                     settings_->devices_panel()->set_imu_available(true);
                     on_imu_toggled(true);
+                    // The discovery path toggles programmatically — the
+                    // checkbox never received a user click, so sync it.
+                    set_imu_ui_state(true);
                 } else {
                     settings_->devices_panel()->set_aps_available(true);
                     on_aps_toggled(true);
+                    set_aps_ui_state(true);
                 }
             });
     connect(&camera_, &CameraController::disconnected, this, [this]() {
