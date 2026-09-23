@@ -171,11 +171,16 @@ private:
             if (p.ts > latest_update_) latest_update_ = p.ts;
             pixel_ids_.push_back(idx);
             ++m00_;
+            // Exact integer accumulation (jAER LineSupport keeps int
+            // moments): float sums of x² reach ~1e6 per term and lose
+            // integer precision past 2^24, and the central-moment
+            // subtraction below then amplifies the rounding into
+            // negative-variance garbage (width() = NaN) on thin lines.
             m10_ += p.x;
             m01_ += p.y;
-            m11_ += static_cast<float>(p.x) * p.y;
-            m20_ += static_cast<float>(p.x) * p.x;
-            m02_ += static_cast<float>(p.y) * p.y;
+            m11_ += static_cast<std::int64_t>(p.x) * p.y;
+            m20_ += static_cast<std::int64_t>(p.x) * p.x;
+            m02_ += static_cast<std::int64_t>(p.y) * p.y;
             // distinguishOpposingGradients default TRUE in jAER: use angle.
             sum_angle_unit_x_ += std::cos(p.angle * kPi / 180.0F);
             sum_angle_unit_y_ += std::sin(p.angle * kPi / 180.0F);
@@ -187,9 +192,9 @@ private:
             --m00_;
             m10_ -= p.x;
             m01_ -= p.y;
-            m11_ -= static_cast<float>(p.x) * p.y;
-            m20_ -= static_cast<float>(p.x) * p.x;
-            m02_ -= static_cast<float>(p.y) * p.y;
+            m11_ -= static_cast<std::int64_t>(p.x) * p.y;
+            m20_ -= static_cast<std::int64_t>(p.x) * p.x;
+            m02_ -= static_cast<std::int64_t>(p.y) * p.y;
             sum_angle_unit_x_ -= std::cos(p.angle * kPi / 180.0F);
             sum_angle_unit_y_ -= std::sin(p.angle * kPi / 180.0F);
             ll_magnitude_sum_ -= p.magnitude;
@@ -236,24 +241,34 @@ private:
 
         void update_properties() {
             if (m00_ == 0) { length_ = 0.0F; return; }
-            center_x_ = m10_ / m00_;
-            center_y_ = m01_ / m00_;
-            const float u20 = m20_ / m00_ - center_x_ * center_x_;
-            const float u02 = m02_ / m00_ - center_y_ * center_y_;
-            const float u11 = m11_ / m00_ - center_x_ * center_y_;
+            const double n = static_cast<double>(m00_);
+            center_x_ = static_cast<float>(m10_ / n);
+            center_y_ = static_cast<float>(m01_ / n);
+            // Central moments in double: the m20/m00 − cx² form subtracts
+            // two large near-equal numbers, which is where the float
+            // accumulation error used to surface (negative variance ⇒
+            // sqrt(negative) ⇒ NaN width, orientation garbage).
+            const double u20 = m20_ / n - static_cast<double>(center_x_) * center_x_;
+            const double u02 = m02_ / n - static_cast<double>(center_y_) * center_y_;
+            const double u11 = m11_ / n - static_cast<double>(center_x_) * center_y_;
             float ori = 0.0F;
-            if (std::fabs(u20 - u02) > 1e-6f) {
-                ori = 0.5F * std::atan((2.0F * u11) / (u20 - u02));
+            if (std::fabs(u20 - u02) > 1e-6) {
+                ori = 0.5F * static_cast<float>(
+                    std::atan((2.0 * u11) / (u20 - u02)) * 180.0 / kPi);
             }
             if (u02 > u20) {
                 ori -= 90.0F;
                 if (ori < -90.0F) ori += 180.0F;
             }
             orientation_deg_ = ori;
-            const float a = u20, b = 2.0F * u11, c = u02;
-            const float disc = std::sqrt(b * b + (a - c) * (a - c));
-            width_ = std::sqrt(6.0F * (a + c - disc));
-            length_ = std::sqrt(6.0F * (a + c + disc));
+            const double a = u20, b = 2.0 * u11, c = u02;
+            const double disc = std::sqrt(b * b + (a - c) * (a - c));
+            // The quadratic-form widths are theoretically >= 0; rounding at
+            // extreme aspect ratios can still probe a hair negative.
+            width_ = static_cast<float>(
+                std::sqrt(std::max(0.0, 6.0 * (a + c - disc))));
+            length_ = static_cast<float>(
+                std::sqrt(std::max(0.0, 6.0 * (a + c + disc))));
             update_endpoints();
         }
 
@@ -265,7 +280,8 @@ private:
             ep2_ = cv::Point2f(center_x_ - unit_x * s, center_y_ - unit_y * s);
         }
 
-        bool is_line_segment() const { return m00_ >= min_support_; }
+        bool is_line_segment() const {
+            return static_cast<float>(m00_) >= min_support_; }
         int id() const { return id_; }
         float center_x() const { return center_x_; }
         float center_y() const { return center_y_; }
@@ -288,7 +304,8 @@ private:
         std::vector<int> pixel_ids_;  // member pixel indices (jAER HashSet)
         Metavision::timestamp creation_time_{0};
         Metavision::timestamp latest_update_{0};
-        float m00_{0}, m10_{0}, m01_{0}, m11_{0}, m20_{0}, m02_{0};
+        int m00_{0};
+        std::int64_t m10_{0}, m01_{0}, m11_{0}, m20_{0}, m02_{0};
         float sum_angle_unit_x_{0}, sum_angle_unit_y_{0};
         float ll_magnitude_sum_{0};
         float center_x_{0}, center_y_{0};
