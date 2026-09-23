@@ -64,9 +64,12 @@ public:
     ///        and every OFF-axis delta is negated.
     void set_off_delta_sign(int sign) { off_sign_ = (sign < 0) ? -1 : 1; }
 
-    /// @brief Sets the sign of the ON-axis delta. Positive on Prophesee and
-    ///        DAVIS; negative for the DVXplorer contrast thresholds
-    ///        (higher threshold → fewer events of that polarity).
+    /// @brief Sets the sign of the ON-axis delta. +1 everywhere as of the
+    ///        25981fd hardware correction: on the DVXplorer a HIGHER
+    ///        contrast threshold yields FEWER events, so the controller's
+    ///        "raise the bias to reduce the rate" maps to +1 too (an
+    ///        earlier revision negated both DVX axes and was reverted on
+    ///        hardware). The OFF axis differs (DAVIS -1, see above).
     void set_on_delta_sign(int sign) { on_sign_ = (sign < 0) ? -1 : 1; }
 
     /// @brief Applies integer deltas: reads the CURRENT register values,

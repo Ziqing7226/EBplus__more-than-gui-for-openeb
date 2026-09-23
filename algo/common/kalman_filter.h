@@ -1,8 +1,10 @@
 // algo/common/kalman_filter.h — 2D position/velocity Kalman filter.
 //
 // Inspired by jAER KalmanFilter (labyrinthkalman). Constant-velocity model for
-// 2D tracking: state = [x, y, vx, vy], measurement = [x, y]. Used by event-level
-// trackers (KalmanTracker) and cluster smoothing. Header-only; relies on small
+// 2D tracking: state = [x, y, vx, vy], measurement = [x, y]. Kept as a
+// jAER-style building block (the event-level trackers that used it were
+// removed in the 2026-08-22 provenance cull; currently test-only).
+// Header-only; relies on small
 // fixed-size Eigen-style arithmetic implemented with plain doubles to avoid a
 // hard Eigen dependency in the common layer.
 
@@ -94,8 +96,8 @@ public:
     double vy() const { return vy_; }
     bool initialized() const { return initialized_; }
 
-    // Read-only covariance/noise accessors used for Mahalanobis gating in
-    // multi-hypothesis tracking (object_tracker MultiHypothesis mode). The
+    // Read-only covariance/noise accessors (kept for Mahalanobis-style
+    // gating; the multi-hypothesis object_tracker mode is gone). The
     // position covariance is diagonal (no x-y cross term), so a 2D
     // Mahalanobis distance factorises as (dx^2/Sx + dy^2/Sy) with
     // Sx = p_xx + r, Sy = p_yy + r. These getters do not alter filter state.

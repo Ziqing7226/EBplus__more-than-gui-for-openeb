@@ -26,12 +26,15 @@
 // approaches the band edge) plus the hold, not a small step cap.
 //
 // Homing (2026-08-21): while BOTH constraints are satisfied (rate inside
-// the band, polarity balance within tolerance), the biases drift SLOWLY
-// toward 0 — the factory default — one unit per kHomeIntervalTicks
-// (~1 s). The controller does not know the register values, so the home
-// command carries no deltas; the hardware side (BiasApplier::home) moves
-// each bias toward 0 and no-ops at 0. Any violation immediately suspends
-// homing and hands control back to the correction loops.
+// the band, polarity balance within tolerance), the controller emits a
+// home command every kHomeIntervalTicks (~1 s). The controller does not
+// know the register values, so the command carries no deltas; the
+// hardware side (BiasApplier::home) steps each bias by HALF the remaining
+// distance (clamped) toward the caller-configured targets — the
+// Prophesee factory default 0, the DAVIS reference operating points
+// (1535/1025), or the DVXplorer contrast defaults (9/9) — and no-ops at
+// the target. Any violation immediately suspends homing and hands control
+// back to the correction loops.
 
 #ifndef GUI_ALGO_ANALYTICS_AUTO_BIAS_CONTROLLER_H
 #define GUI_ALGO_ANALYTICS_AUTO_BIAS_CONTROLLER_H
@@ -50,9 +53,10 @@ struct BiasCommand {
     int delta_on{0};    ///< Delta for bias_diff_on (positive = less sensitive)
     int delta_off{0};   ///< Delta for bias_diff_off
     bool active{false}; ///< True when this command requests a real adjustment
-    /// @brief Home command: move both diff biases one step toward 0 (the
-    ///        factory default). delta_on/delta_off are unused — the
-    ///        hardware side knows the current register values.
+    /// @brief Home command: step both biases toward the hardware-side home
+    ///        targets (half the remaining distance per command; the caller
+    ///        configures the targets). delta_on/delta_off are unused —
+    ///        the hardware side knows the current register values.
     bool home{false};
 };
 
