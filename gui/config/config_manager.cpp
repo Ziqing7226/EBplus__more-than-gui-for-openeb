@@ -98,8 +98,12 @@ QJsonObject ConfigManager::capture_esp(CameraController* c) const {
         QJsonObject a;
         try {
             a["enabled"] = af->is_enabled();
+            a["mode"] = static_cast<int>(af->get_filtering_mode());
             a["band_low"] = static_cast<int>(af->get_band_low_frequency());
             a["band_high"] = static_cast<int>(af->get_band_high_frequency());
+            a["duty_cycle"] = static_cast<double>(af->get_duty_cycle());
+            a["start_threshold"] = static_cast<int>(af->get_start_threshold());
+            a["stop_threshold"] = static_cast<int>(af->get_stop_threshold());
         } catch (...) {}
         o["anti_flicker"] = a;
     }
@@ -127,9 +131,17 @@ QJsonObject ConfigManager::capture_trigger(CameraController* c) const {
     QJsonObject o;
     if (auto* ti = c->trigger_in_facility()) {
         QJsonObject i;
-        // I_TriggerIn exposes per-channel state; we persist the Main channel.
-        try { i["enabled"] = ti->is_enabled(Metavision::I_TriggerIn::Channel::Main); }
-        catch (...) { i["enabled"] = false; }
+        // I_TriggerIn exposes per-channel state (the panel renders one
+        // checkbox per available channel) — persist every standard channel
+        // that answers, not just Main.
+        const std::pair<const char*, Metavision::I_TriggerIn::Channel> chans[] = {
+            {"main", Metavision::I_TriggerIn::Channel::Main},
+            {"aux", Metavision::I_TriggerIn::Channel::Aux},
+            {"loopback", Metavision::I_TriggerIn::Channel::Loopback},
+        };
+        for (const auto& [name, ch] : chans) {
+            try { i[name] = ti->is_enabled(ch); } catch (...) {}
+        }
         o["in"] = i;
     }
     if (auto* to = c->trigger_out_facility()) {
@@ -223,11 +235,35 @@ bool ConfigManager::apply_esp(CameraController* c, const QJsonObject& o, QString
         auto* af = c->anti_flicker_facility();
         const auto a = o.value("anti_flicker").toObject();
         if (af) {
+            // Parameters first, enable last, so the filter starts with the
+            // persisted configuration (same order as trail_filter below).
+            if (a.contains("mode")) {
+                try {
+                    af->set_filtering_mode(
+                        static_cast<Metavision::I_AntiFlickerModule::AntiFlickerMode>(
+                            a.value("mode").toInt()));
+                } catch (...) { ok = false; }
+            }
             if (a.contains("band_low") && a.contains("band_high")) {
                 try {
                     af->set_frequency_band(static_cast<uint32_t>(a.value("band_low").toInt()),
                                            static_cast<uint32_t>(a.value("band_high").toInt()));
                 } catch (...) { ok = false; }
+            }
+            if (a.contains("duty_cycle")) {
+                try { af->set_duty_cycle(
+                          static_cast<float>(a.value("duty_cycle").toDouble())); }
+                catch (...) { ok = false; }
+            }
+            if (a.contains("start_threshold")) {
+                try { af->set_start_threshold(static_cast<uint32_t>(
+                          a.value("start_threshold").toVariant().toLongLong())); }
+                catch (...) { ok = false; }
+            }
+            if (a.contains("stop_threshold")) {
+                try { af->set_stop_threshold(static_cast<uint32_t>(
+                          a.value("stop_threshold").toVariant().toLongLong())); }
+                catch (...) { ok = false; }
             }
             if (a.contains("enabled")) {
                 // enable() is a register write: a failing device throws
@@ -283,12 +319,19 @@ bool ConfigManager::apply_trigger(CameraController* c, const QJsonObject& o, QSt
         auto* ti = c->trigger_in_facility();
         const auto i = o.value("in").toObject();
         if (ti) {
-            const bool want = i.value("enabled").toBool();
-            const auto ch = Metavision::I_TriggerIn::Channel::Main;
-            try {
-                if (want) ti->enable(ch);
-                else      ti->disable(ch);
-            } catch (...) { ok = false; }
+            const std::pair<const char*, Metavision::I_TriggerIn::Channel> chans[] = {
+                {"main", Metavision::I_TriggerIn::Channel::Main},
+                {"aux", Metavision::I_TriggerIn::Channel::Aux},
+                {"loopback", Metavision::I_TriggerIn::Channel::Loopback},
+            };
+            for (const auto& [name, ch] : chans) {
+                if (!i.contains(name)) continue;
+                const bool want = i.value(name).toBool();
+                try {
+                    if (want) ti->enable(ch);
+                    else      ti->disable(ch);
+                } catch (...) { ok = false; }
+            }
         }
     }
     if (o.contains("out")) {
