@@ -207,6 +207,7 @@ bool CameraController::connect_davis(const davis::DeviceDescriptor& descriptor) 
     conditioner_.init(sensor_info_.width, sensor_info_.height);
     conditioner_.set_filter_chain(&filter_chain_);
     conditioner_.reset_temporal();
+    validate_roi_after_connect();
 
     const std::uint16_t fps = frame_pipeline_.fps();
     const Metavision::timestamp acc = frame_pipeline_.accumulation_time_us();
@@ -265,6 +266,7 @@ bool CameraController::connect_dvx(const davis::DeviceDescriptor& descriptor) {
     conditioner_.init(sensor_info_.width, sensor_info_.height);
     conditioner_.set_filter_chain(&filter_chain_);
     conditioner_.reset_temporal();
+    validate_roi_after_connect();
 
     const std::uint16_t fps = frame_pipeline_.fps();
     const Metavision::timestamp acc = frame_pipeline_.accumulation_time_us();
@@ -353,6 +355,7 @@ bool CameraController::connect_external_file(std::unique_ptr<ExternalFileSource>
     conditioner_.init(sensor_info_.width, sensor_info_.height);
     conditioner_.set_filter_chain(&filter_chain_);
     conditioner_.reset_temporal();
+    validate_roi_after_connect();
 
     const std::uint16_t fps = frame_pipeline_.fps();
     const Metavision::timestamp acc = frame_pipeline_.accumulation_time_us();
@@ -704,6 +707,48 @@ void CameraController::unified_roi(bool& enabled, int& x0, int& y0,
     }
     enabled = roi_enabled_;
     x0 = roi_x0_; y0 = roi_y0_; x1 = roi_x1_; y1 = roi_y1_;
+}
+
+void CameraController::validate_roi_after_connect() {
+    if (is_file_) {
+        bool en = false;
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        frame_pipeline_.file_roi(en, x0, y0, x1, y1);
+        if (!en) return;
+        // A previous file's software crop is meaningless for the newly
+        // opened file: FileFrameGenerator::set_geometry would re-apply it
+        // (clamped) while every checkbox shows OFF — reset instead.
+        frame_pipeline_.set_file_roi(false, 0, 0, 0, 0, false);
+        emit roi_state_changed(false, 0, 0, 0, 0);
+        return;
+    }
+    const int sw = sensor_info_.width;
+    const int sh = sensor_info_.height;
+    if (!roi_enabled_ || sw <= 0 || sh <= 0) return;
+    if (roi_roni_) {
+        // RONI drops events INSIDE the rect: a stale rect can only change
+        // how much is dropped, never zero the stream. Re-sync the UI only.
+        emit roi_state_changed(roi_enabled_, roi_x0_, roi_y0_, roi_x1_, roi_y1_);
+        return;
+    }
+    if (roi_x0_ >= sw || roi_y0_ >= sh) {
+        // No overlap with the new sensor: an enabled keep-inside rect
+        // entirely outside it crops every batch to zero events (silent
+        // total data loss). Disable outright.
+        roi_enabled_ = false;
+        conditioner_.set_roi(false, 0, 0, sw, sh, false);
+        frame_pipeline_.set_display_roi_origin(false, 0, 0);
+        emit roi_state_changed(false, 0, 0, 0, 0);
+        return;
+    }
+    if (roi_x1_ > sw || roi_y1_ > sh) {
+        // Partial overlap: clamp to the intersection.
+        roi_x1_ = std::min(roi_x1_, sw);
+        roi_y1_ = std::min(roi_y1_, sh);
+        conditioner_.set_roi(true, roi_x0_, roi_y0_, roi_x1_, roi_y1_, false);
+        frame_pipeline_.set_display_roi_origin(true, roi_x0_, roi_y0_);
+    }
+    emit roi_state_changed(roi_enabled_, roi_x0_, roi_y0_, roi_x1_, roi_y1_);
 }
 facility::AntiFlicker* CameraController::anti_flicker_facility() {
     if (!camera_) return nullptr;
@@ -1294,6 +1339,7 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
     conditioner_.init(sensor_info_.width, sensor_info_.height);
     conditioner_.set_filter_chain(&filter_chain_);
     conditioner_.reset_temporal();
+    validate_roi_after_connect();
 
     // Start the frame pipeline for the new sensor geometry. File sources use
     // FileFrameGenerator (buffers events, controls playback rate via QTimer);

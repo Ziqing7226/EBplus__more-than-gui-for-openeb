@@ -239,6 +239,18 @@ public:
     bool set_unified_roi(bool enabled, int x, int y, int w, int h,
                          std::optional<bool> roni = std::nullopt);
 
+    /// @brief Connect-time sanity for the persistent unified ROI (called at
+    /// the end of every connect path, after the conditioner init): the rect
+    /// survives teardown by design (same-camera reconnects keep the crop),
+    /// but a NEW source can be smaller than the saved rect — applied
+    /// unclamped, the conditioner would crop every batch to zero events.
+    /// Salvages the overlap, drops the ROI when nothing overlaps, resets a
+    /// previous file's software crop, and re-emits roi_state_changed so the
+    /// panels / bridge / display re-sync (disconnect unchecks the RoiPanel
+    /// with signals blocked, so the UI would otherwise disagree).
+    void validate_roi_after_connect();
+
+
     /// @brief Reads the current unified ROI state (computed rect
     /// [x0,x1) × [y0,y1]) for overlay rendering.
     void unified_roi(bool& enabled, int& x0, int& y0, int& x1, int& y1) const;
