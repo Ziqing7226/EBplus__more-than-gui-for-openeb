@@ -368,22 +368,38 @@ void Aedat4FileSource::decode_imu_body(const std::uint8_t* pd, std::size_t pn) {
     const std::size_t vec = fb.vector(table, 4);
     if (vec == 0 || !fb.valid(vec, 4)) return;
     const std::uint32_t count = fb.u32(vec);
-    if (count == 0 || (pn - vec - 4) / 4 < count) return;
+    // vec + 4 <= pn first: the subtraction below must not underflow on a
+    // crafted buffer whose vector sits at the very end.
+    if (count == 0 || vec + 4 > pn || count > (pn - vec - 4) / 4) return;
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::size_t slot = vec + 4 + 4 * i;
         const std::uint32_t rel = fb.u32(slot);
         const std::size_t elem = slot + rel;
-        if (!fb.valid(elem, 52)) return;
+        // Per-field vtable lookups instead of a fixed 52-byte table
+        // assumption: dv's own flatbuffers builder omits default-valued
+        // trailing fields (the absent magnetometer), so DV-produced sample
+        // tables are SMALLER than ours and a hard valid(elem, 52) silently
+        // dropped every DV-recorded IMU packet wholesale. Only the
+        // timestamp is mandatory; missing floats read as 0.
+        const std::size_t ts_pos = fb.field(elem, 4);
+        if (ts_pos == 0 || !fb.valid(ts_pos, 8)) return;
+        const auto f32_field = [&](unsigned vt) -> float {
+            const std::size_t p = fb.field(elem, vt);
+            return (p != 0 && fb.valid(p, 4)) ? fb.f32(p) : 0.0F;
+        };
         davis::ImuSample s;
-        s.t = fb.i64(elem + 4);
+        s.t = fb.i64(ts_pos);
         if (ev_t0_known_) s.t -= ev_t0_;
-        s.temperature = fb.f32(elem + 12);
-        s.accel_x = fb.f32(elem + 16);
-        s.accel_y = fb.f32(elem + 20);
-        s.accel_z = fb.f32(elem + 24);
-        s.gyro_x = fb.f32(elem + 28);
-        s.gyro_y = fb.f32(elem + 32);
-        s.gyro_z = fb.f32(elem + 36);
+        // IMU sample-table fields are CONSECUTIVE vtable shorts:
+        // +4 ts, +6 temperature, +8/+10/+12 accel, +14/+16/+18 gyro
+        // (+20/+22/+24 magnetometer — absent here).
+        s.temperature = f32_field(6);
+        s.accel_x = f32_field(8);
+        s.accel_y = f32_field(10);
+        s.accel_z = f32_field(12);
+        s.gyro_x = f32_field(14);
+        s.gyro_y = f32_field(16);
+        s.gyro_z = f32_field(18);
         s.valid = true;
         if (!has_imu_) {
             has_imu_ = true;  // discovered by content (FTAB entries of
