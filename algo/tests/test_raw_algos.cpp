@@ -652,7 +652,9 @@ TEST_F(RawAlgoTest, DirectionSelectiveOrientationAwarePath) {
             const int o = ori.classify(batch[i]);
             const int d = dsf.classify(batch[i], o);
             EXPECT_GE(d, -1);
-            if (d >= 0) EXPECT_LT(d, DirectionSelectiveFilter::kNumDirections);
+            if (d >= 0) {
+                EXPECT_LT(d, DirectionSelectiveFilter::kNumDirections);
+            }
         }
     }
 }
