@@ -498,6 +498,17 @@ void MainWindow::build_menus() {
         auto* dock = findChild<QDockWidget*>("PlaybackDock");
         if (dock) dock->setVisible(on);
     });
+    // The dock is also shown/hidden programmatically (auto-show on file
+    // open, teardown) and via its close button -- mirror that into the
+    // checkable action so the first Ctrl+Shift+P after opening a file does
+    // what the menu state promises.
+    if (auto* dock = findChild<QDockWidget*>("PlaybackDock")) {
+        connect(dock, &QDockWidget::visibilityChanged, pb_toggle,
+                [pb_toggle](bool vis) {
+                    QSignalBlocker b(pb_toggle);
+                    pb_toggle->setChecked(vis);
+                });
+    }
     m_view->addAction(tr("Reset Layout"), this, &MainWindow::on_reset_layout);
     m_view->addAction(tr("Save Layout..."), this, &MainWindow::on_save_layout);
     m_view->addAction(tr("Load Layout..."), this, &MainWindow::on_load_layout);
@@ -876,6 +887,13 @@ void MainWindow::wire_signals() {
         set_imu_ui_state(camera_.imu_enabled());
         settings_->devices_panel()->set_aps_available(caps.aps);
         set_aps_ui_state(camera_.aps_enabled());
+        // A direct source switch (File → Open) never runs the disconnected
+        // handler that closes the IMU/APS windows — the teardown path is
+        // silent by design. A new source without the stream would leave the
+        // old window open as a zombie (frozen pose/last frame, 30 Hz drain
+        // against a cleared ring, checkbox hidden so it can't be re-synced).
+        if (!caps.imu && imu_window_) imu_window_->close();
+        if (!caps.aps && aps_window_) aps_window_->close();
     });
     // AEDAT4 replay: side streams appear by content — when the reader
     // decodes the first IMU/APS packet, check the box and open the window.
@@ -2154,7 +2172,7 @@ void MainWindow::on_about() {
            "Bias / ROI / ESP / Trigger panels, recording & playback, HDF5 / AVI "
            "export, JSON config, OpenEB filter-chain preprocessing, "
            "file conversion tools, calibration wizard, "
-           "30 self-developed CV/analytics algorithms with overlay/replace/"
+           "21 self-developed + 4 OpenEB CV/analytics algorithms with overlay/replace/"
            "standalone display modes, XYT 3D point cloud, and more.</p>"));
 }
 

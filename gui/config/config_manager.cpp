@@ -522,8 +522,9 @@ bool ConfigManager::apply_algo_state(AlgoBridge* bridge, const QJsonObject& obj,
             // skip silently (no warning, no forwarding — backends no longer
             // honour them anyway).
             if (legacy_roi && key.rfind("roi_", 0) == 0) {
-                if (legacy_roi->empty()) (*legacy_roi)[key] = val;
-                else if (legacy_roi->count(key)) (*legacy_roi)[key] = val;
+                // First algorithm wins (the header documents exactly that;
+                // the old else-branch was a last-writer-wins override).
+                if (!legacy_roi->count(key)) (*legacy_roi)[key] = val;
                 continue;
             }
 

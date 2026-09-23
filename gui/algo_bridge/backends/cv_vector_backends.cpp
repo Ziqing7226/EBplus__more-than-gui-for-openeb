@@ -102,9 +102,9 @@ public:
         if (k == "num_theta_bins") return from_i(num_theta_bins_);
         if (k == "num_rho_bins") return from_i(num_rho_bins_);
         if (k == "hough_decay_factor" && algo_) return from_d(algo_->hough_decay_factor());
-        return {};
         if (k == "output_tau_ms") return from_d(output_tau_ms_);
         if (k == "favor_vertical_range_deg") return from_d(favor_vertical_range_deg_);
+        return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
         passthrough_.assign(b, e);
