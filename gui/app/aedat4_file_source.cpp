@@ -418,7 +418,11 @@ void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn,
     // writer byte-packs the table), so read it as uint8 — a 4-byte read
     // would swallow the sizeX bytes and drop every frame.
     const auto format = fb.scalar<std::uint8_t>(table, 14, static_cast<std::uint8_t>(0));
-    const int channels = (format == 2) ? 3 : 1;  // OPENCV_8U_C3 / C1
+    // dv FrameFormat: OPENCV_8U_C3 = 16; the value 2 is OPENCV_16U_C1 in the
+    // schema but our writer mislabeled C3 frames as 2 before the fix — keep
+    // accepting it so existing recordings stay replayable.
+    const int channels =
+        (format == 16 || format == 2) ? 3 : 1;  // OPENCV_8U_C3 (16 | legacy 2) / C1
     const std::int16_t w = fb.scalar<std::int16_t>(table, 16, 0);
     const std::int16_t h = fb.scalar<std::int16_t>(table, 18, 0);
     const std::size_t vec = fb.vector(table, 24);

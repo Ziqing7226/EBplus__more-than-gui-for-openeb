@@ -233,6 +233,77 @@ TEST(Aedat4Writer, WriteAfterCloseIsIgnored) {
     std::filesystem::remove(path);
 }
 
+TEST(Aedat4Writer, RoundTripColorFrameAndFormatByte) {
+    // Color frames must round-trip channel-exact, and the on-disk format
+    // byte must be dv's OPENCV_8U_C3 (16) — the pre-fix writer emitted 2,
+    // which the schema reads as OPENCV_16U_C1 (DV rejected/decoded wrong).
+    const std::string path =
+        (std::filesystem::temp_directory_path() / "ebplus_aedat4_c3.aedat4").string();
+
+    gui::Aedat4Writer writer;
+    ASSERT_TRUE(writer.open(path, 8, 4, "TEST-C3"));
+
+    gui::davis::ApsFrame frame;
+    frame.t = 5000;
+    frame.width = 8;
+    frame.height = 4;
+    frame.image = cv::Mat(4, 8, CV_8UC3);
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 8; ++c) {
+            frame.image.at<cv::Vec3b>(r, c) = cv::Vec3b(
+                static_cast<std::uint8_t>(r * 10),
+                static_cast<std::uint8_t>(c * 5),
+                static_cast<std::uint8_t>(r * 3 + c));
+        }
+    }
+    frame.valid = true;
+    writer.write_aps(frame);
+    writer.close();
+
+    // Byte-level: the FRME packet's format byte (packet buffer offset 44,
+    // i.e. 40 bytes past the ident) must be 16. Skip the IOHeader region —
+    // its XML contains the literal "FRME" as the stream typeIdentifier.
+    std::ifstream in(path, std::ios::binary);
+    const std::vector<char> bytes{std::istreambuf_iterator<char>(in), {}};
+    in.close();
+    ASSERT_GT(bytes.size(), 18u);
+    const std::size_t io_size = static_cast<std::size_t>(
+        static_cast<std::uint8_t>(bytes[14]) |
+        (static_cast<std::uint8_t>(bytes[15]) << 8) |
+        (static_cast<std::uint8_t>(bytes[16]) << 16) |
+        (static_cast<std::uint8_t>(bytes[17]) << 24));
+    std::size_t frme = bytes.size();
+    for (std::size_t i = 18 + io_size; i + 4 < bytes.size(); ++i) {
+        if (bytes[i] == 'F' && bytes[i + 1] == 'R' && bytes[i + 2] == 'M' &&
+            bytes[i + 3] == 'E') {
+            frme = i;
+            break;
+        }
+    }
+    ASSERT_LT(frme + 41, bytes.size()) << "no FRME packet found";
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[frme + 40]), 16)
+        << "color frame format must be dv OPENCV_8U_C3";
+
+    gui::Aedat4FileSource source(path);
+    source.open();
+    ASSERT_TRUE(source.has_aps());
+    std::vector<gui::davis::ApsFrame> aps_out;
+    source.set_aps_sink([&](const gui::davis::ApsFrame& f) { aps_out.push_back(f); });
+    std::string error;
+    source.run([](const Metavision::EventCD*, const Metavision::EventCD*) {},
+               [&](const std::string& err) { error = err; });
+    EXPECT_TRUE(error.empty()) << error;
+    ASSERT_EQ(aps_out.size(), 1u);
+    ASSERT_EQ(aps_out[0].image.type(), CV_8UC3);
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 8; ++c) {
+            EXPECT_EQ(aps_out[0].image.at<cv::Vec3b>(r, c),
+                      frame.image.at<cv::Vec3b>(r, c));
+        }
+    }
+    std::filesystem::remove(path);
+}
+
 namespace {
 
 std::uint16_t rd16(const std::vector<std::uint8_t>& b, std::size_t at) {

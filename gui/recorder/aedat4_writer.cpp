@@ -155,7 +155,8 @@ void build_frame_packet(const davis::ApsFrame& f, std::vector<std::uint8_t>& out
     std::memcpy(out.data() + 24, &f.t, 8);           // VT6 tsSOF
     std::memcpy(out.data() + 32, &f.t, 8);           // VT8 tsEOF
     put_u32(out, 40, static_cast<std::uint32_t>(vector_pos - 40));   // VT24 → pixels
-    out[44] = channels == 3 ? 2 : 0;  // VT14: OPENCV_8U_C1 / OPENCV_8U_C3
+    out[44] = channels == 3 ? 16 : 0;  // VT14: dv FrameFormat OPENCV_8U_C1(0) /
+                                       // OPENCV_8U_C3(16) — 2 is OPENCV_16U_C1
     const std::int16_t w = static_cast<std::int16_t>(f.image.cols);
     const std::int16_t h = static_cast<std::int16_t>(f.image.rows);
     std::memcpy(out.data() + 46, &w, 2);             // VT16 sizeX
