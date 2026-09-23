@@ -449,22 +449,30 @@ bool CameraController::start() {
                 frame_pipeline_.add_events(b, e);
             };
             try {
-                src->run(sink, [this](const std::string& err) {
+                // Capture the source identity: a done delivery queued by
+                // source A can land AFTER the user opened source B — it
+                // must not touch B's session state (same hazard the runtime
+                // error callback guards with the camera pointer, §六-C1).
+                auto* src_id = src;
+                src->run(sink, [this, src_id](const std::string& err) {
                     QMetaObject::invokeMethod(
-                        this, [this, err]() {
+                        this, [this, src_id, err]() {
+                            if (external_source_.get() != src_id) return;
                             on_external_source_done(QString::fromUtf8(err.c_str()));
                         },
                         Qt::QueuedConnection);
                 });
             } catch (const std::exception& e) {
                 QMetaObject::invokeMethod(
-                    this, [this, msg = std::string(e.what())]() {
+                    this, [this, src_id = src, msg = std::string(e.what())]() {
+                        if (external_source_.get() != src_id) return;
                         on_external_source_done(QString::fromUtf8(msg.c_str()));
                     },
                     Qt::QueuedConnection);
             } catch (...) {
                 QMetaObject::invokeMethod(
-                    this, [this]() {
+                    this, [this, src_id = src]() {
+                        if (external_source_.get() != src_id) return;
                         on_external_source_done(tr("Unknown reader error"));
                     },
                     Qt::QueuedConnection);
@@ -876,7 +884,8 @@ void CameraController::on_imu_sample(const davis::ImuSample& sample) {
     imu_latest_ = sample;
     const auto seq = ++imu_count_;
     imu_ring_.emplace_back(seq, sample);
-    while (imu_ring_.size() > kImuRingMax) imu_ring_.pop_front();
+    const std::size_t cap = is_file_ ? kImuRingMaxFile : kImuRingMax;
+    while (imu_ring_.size() > cap) imu_ring_.pop_front();
 #else
     (void)sample;
 #endif
