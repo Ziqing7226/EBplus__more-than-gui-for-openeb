@@ -75,14 +75,25 @@ bool write_file(const std::string& path, const Buf& buf) {
 }
 
 // --- LZ4 builders (simple payloads) --------------------------------------------
+//
+// Frames are built per the lz4 frame spec v1.6: magic | FLG | BD | HC (the
+// 1-byte header checksum is UNCONDITIONAL) | blocks | optional 4-byte
+// content checksum. FLG bits: 0x40 = version 01, 0x20 = block independence,
+// 0x10 = block checksums, 0x08 = content size, 0x04 = content checksum.
+
+// Frame header prologue: magic, FLG, BD, HC byte.
+Buf lz4_header(std::uint8_t flg) {
+    Buf out;
+    out.u32(0x184D2204);
+    out.u8(flg);
+    out.u8(0x40); // block max 64K
+    out.u8(0x00); // header checksum byte (always present, not verified)
+    return out;
+}
 
 // LZ4 frame with a single UNCOMPRESSED block (high bit of the block size set).
 Buf lz4_frame_stored(const std::string& payload) {
-    Buf out;
-    out.u32(0x184D2204);
-    out.u8(0x64); // version 01, block-independent, header checksum, no content size
-    out.u8(0x40); // block max 64K
-    out.u8(0x00); // header checksum byte (skipped by our decoder)
+    Buf out = lz4_header(0x60); // version 01, block-independent
     out.u32(static_cast<std::uint32_t>(payload.size()) | 0x80000000u);
     out.raw(payload);
     out.u32(0); // EndMark
@@ -92,11 +103,7 @@ Buf lz4_frame_stored(const std::string& payload) {
 // One LZ4 block sequence: literals "abcde" + match (offset 5, len 5) →
 // "abcdeabcde".
 Buf lz4_frame_one_match() {
-    Buf out;
-    out.u32(0x184D2204);
-    out.u8(0x64);
-    out.u8(0x40);
-    out.u8(0x00);
+    Buf out = lz4_header(0x60);
     Buf block;
     block.u8(0x51); // literal len 5, match len (1 + 4)
     block.raw("abcde");
@@ -133,17 +140,64 @@ TEST(Lz4Decoder, BlockWithMatch) {
     EXPECT_EQ(std::string(out.begin(), out.end()), "abcdeabcde");
 }
 
+TEST(Lz4Decoder, HeaderChecksumIsUnconditional) {
+    // A frame WITHOUT the mandatory HC byte after the descriptor must be
+    // rejected — catching a decoder that treats HC as optional (FLG bit 2 is
+    // the CONTENT checksum flag, not "header checksum present").
+    Buf frame = lz4_frame_stored("payload");
+    frame.b.erase(frame.b.begin() + 6); // drop magic(4)+FLG+BD+HC's last byte
+    std::vector<std::uint8_t> out;
+    std::string err;
+    EXPECT_FALSE(gui::lz4_decompress_frame(frame.b.data(), frame.b.size(), out, err));
+    EXPECT_FALSE(err.empty());
+}
+
+TEST(Lz4Decoder, DvStyleBlockLinkedCrossBlockMatch) {
+    // DV compresses with LZ4F_blockLinked (FLG 0x40): a compressed block may
+    // reference the PREVIOUS block's output. Block 1 stores "abcde"; block 2
+    // is a zero-literal match (offset 5, len 5) into block 1's output.
+    Buf frame = lz4_header(0x40);
+    frame.u32(5u | 0x80000000u);
+    frame.raw("abcde");
+    Buf block;
+    block.u8(0x01); // literal len 0, match len (1 + 4)
+    block.u8(5);
+    block.u8(0); // offset = 5 → resolves into block 1's output
+    frame.u32(static_cast<std::uint32_t>(block.size()));
+    frame.b.insert(frame.b.end(), block.b.begin(), block.b.end());
+    frame.u32(0);
+    std::vector<std::uint8_t> out;
+    std::string err;
+    ASSERT_TRUE(gui::lz4_decompress_frame(frame.b.data(), frame.b.size(), out, err))
+        << err;
+    ASSERT_EQ(out.size(), 10u);
+    EXPECT_EQ(std::string(out.begin(), out.end()), "abcdeabcde");
+}
+
+TEST(Lz4Decoder, ContentChecksumSkipped) {
+    // FLG 0x64 = version 01 + independent blocks + content checksum: the
+    // 4-byte xxh32 after the EndMark must be consumed, not rejected as
+    // trailing bytes.
+    Buf frame = lz4_header(0x64);
+    frame.u32(static_cast<std::uint32_t>(11) | 0x80000000u);
+    frame.raw("checksummed");
+    frame.u32(0);          // EndMark
+    frame.u32(0xDEADBEEF); // content checksum placeholder
+    std::vector<std::uint8_t> out;
+    std::string err;
+    ASSERT_TRUE(gui::lz4_decompress_frame(frame.b.data(), frame.b.size(), out, err))
+        << err;
+    ASSERT_EQ(out.size(), 11u);
+    EXPECT_EQ(std::string(out.begin(), out.end()), "checksummed");
+}
+
 TEST(Lz4Decoder, MultiBlockFrame) {
     // One frame carrying TWO uncompressed blocks — exercises the intra-frame
     // block loop (real packets larger than the declared block maximum are
     // split into several blocks by the compressor).
     const std::string p1(100, 'a');
     const std::string p2(100, 'b');
-    Buf frame;
-    frame.u32(0x184D2204);
-    frame.u8(0x64);
-    frame.u8(0x40);
-    frame.u8(0x00);
+    Buf frame = lz4_header(0x60);
     frame.u32(static_cast<std::uint32_t>(p1.size()) | 0x80000000u);
     frame.raw(p1);
     frame.u32(static_cast<std::uint32_t>(p2.size()) | 0x80000000u);

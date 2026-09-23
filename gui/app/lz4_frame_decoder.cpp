@@ -1,11 +1,15 @@
 // gui/app/lz4_frame_decoder.cpp — decode-only LZ4 (frame + block) decoder.
 //
 // Frame format (lz4 frame spec v1.6.x): magic 0x184D2204, FLG/BD descriptor
-// bytes, optional content size / dict id, header checksum, then blocks
-// [u32 size | high bit = uncompressed | 0 = EndMark] until EndMark. Block
+// bytes, optional content size, the always-present 1-byte header checksum,
+// then blocks [u32 size | high bit = uncompressed | 0 = EndMark] until
+// EndMark, optionally followed by the 4-byte content checksum. Block
 // payloads use the LZ4 block sequence format (token → literals → u16 LE
-// offset → match copy). Only what DV's AEDAT4 writer emits is handled:
-// version 01 frames, no dictionary, checksums skipped when present.
+// offset → match copy). Block checksums (FLG bit 4) and content checksums
+// (FLG bit 2) are skipped, not verified. Matches may reference previously
+// decoded output across blocks (blockLinked frames, DV's default); with
+// independent blocks such a reference can only come from a corrupt stream,
+// which a decode-only reader does not need to distinguish.
 
 #include "lz4_frame_decoder.h"
 
@@ -13,11 +17,14 @@ namespace gui {
 namespace {
 
 constexpr std::uint32_t kFrameMagic = 0x184D2204;
+// A decoded event packet is at most a few MB; anything claiming or producing
+// more than this is a corrupt/hostile frame (unbounded reserve() would throw
+// far below this, but the cap also bounds the decompression loop itself).
+constexpr std::size_t kMaxDecodedBytes = 512u << 20;
 
 // Decodes one compressed LZ4 block sequence into @p out (appended).
 bool decompress_block(const std::uint8_t* src, const std::uint8_t* src_end,
                       std::vector<std::uint8_t>& out) {
-    const std::size_t out_base = out.size();
     const std::uint8_t* p = src;
     for (;;) {
         if (p >= src_end) return false;
@@ -52,8 +59,9 @@ bool decompress_block(const std::uint8_t* src, const std::uint8_t* src_end,
                 match_len += b;
             } while (b == 255);
         }
-        // Matches may only reference this block's decoded output.
-        if (offset > out.size() - out_base) return false;
+        // Matches may reference any previously decoded output of the frame
+        // (blockLinked semantics: up to the window size across blocks).
+        if (offset > out.size()) return false;
         // Forward byte-by-byte copy: references into the freshly written
         // tail implement the standard overlapping-run semantics.
         const std::size_t match_pos = out.size();
@@ -96,7 +104,8 @@ bool lz4_decompress_frame(const std::uint8_t* data, std::size_t size,
             return false;
         }
         const bool has_content_size = flg & 0x08;
-        const bool has_header_checksum = flg & 0x04;
+        const bool has_block_checksum = flg & 0x10;
+        const bool has_content_checksum = flg & 0x04;
         const bool has_dict_id = flg & 0x01;
         const unsigned bmax_code = (bd >> 4) & 0x07;
         if (bmax_code == 0 || (bd & 0x8F) != 0) {
@@ -113,6 +122,10 @@ bool lz4_decompress_frame(const std::uint8_t* data, std::size_t size,
             for (int i = 0; i < 8; ++i) {
                 content_size |= static_cast<std::uint64_t>(*p++) << (8 * i);
             }
+            if (content_size > kMaxDecodedBytes) {
+                error = "unreasonable LZ4 content size";
+                return false;
+            }
         }
         if (has_dict_id) {
             if (end - p < 4) {
@@ -121,15 +134,15 @@ bool lz4_decompress_frame(const std::uint8_t* data, std::size_t size,
             }
             p += 4; // dictionary id unused
         }
-        if (has_header_checksum) {
-            if (p >= end) {
-                error = "truncated LZ4 frame header";
-                return false;
-            }
-            ++p; // xxh32 header checksum byte not verified (decode-only)
+        // The 1-byte header checksum is unconditionally present after the
+        // descriptor (xxh32 of the header, second byte; not verified here).
+        if (p >= end) {
+            error = "truncated LZ4 frame header";
+            return false;
         }
+        ++p;
         if (content_size > 0) {
-            out.reserve(out.size() + content_size);
+            out.reserve(out.size() + static_cast<std::size_t>(content_size));
         }
         // Blocks.
         for (;;) {
@@ -149,13 +162,33 @@ bool lz4_decompress_frame(const std::uint8_t* data, std::size_t size,
                 error = "invalid LZ4 block size";
                 return false;
             }
+            const std::size_t out_before = out.size();
             if (uncompressed) {
                 out.insert(out.end(), p, p + bsize);
             } else if (!decompress_block(p, p + bsize, out)) {
                 error = "corrupt LZ4 block";
                 return false;
             }
+            if (out.size() - out_before > block_max ||
+                out.size() > kMaxDecodedBytes) {
+                error = "LZ4 output exceeds size limit";
+                return false;
+            }
             p += bsize;
+            if (has_block_checksum) {
+                if (end - p < 4) {
+                    error = "truncated LZ4 block checksum";
+                    return false;
+                }
+                p += 4; // xxh32 block checksum not verified (decode-only)
+            }
+        }
+        if (has_content_checksum) {
+            if (end - p < 4) {
+                error = "truncated LZ4 content checksum";
+                return false;
+            }
+            p += 4; // xxh32 content checksum not verified (decode-only)
         }
     }
     if (p != end) {
