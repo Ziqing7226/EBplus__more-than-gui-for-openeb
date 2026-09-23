@@ -241,9 +241,15 @@ private:
             expected_x_ = frame_w_;
             expected_y_ = frame_h_;
         }
-        // CDAVIS walk start: odd start position ⇒ begin at row 1 (reference
-        // startPositionOdd from the ROI start column/row); a single-row read
-        // always starts at row 0.
+        // CDAVIS walk start: a single-row read always starts at row 0;
+        // otherwise an even ROI start begins at row 1 (odd at row 0).
+        // DELIBERATE: this matches dv's own COMMENT ("first 320 pixels are
+        // even, then odd") — dv's CODE computes startPositionOdd as the
+        // negation of ours, i.e. dv's code and its comment contradict each
+        // other and this decoder follows the comment, not the code. Not
+        // hardware-adjudicated yet (CDAVIS untested on hardware); do NOT
+        // "fix" this to match dv's code without a real-sensor check, that
+        // would just flip the ambiguity to the other side.
         const auto roi_start = invert_xy_ ? roi_x_ : roi_y_;
         cdavis_start_odd_ = (roi_start & 0x01) != 0;
         if (expected_y_ == 1) cdavis_start_odd_ = false;
