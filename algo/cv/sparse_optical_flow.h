@@ -303,8 +303,15 @@ private:
             const Event& e = events[i];
             if (e.x >= width_ || e.y >= height_) continue;
             const int p = e.p & 1;
-            // Add event timestamp to the histogram.
-            lk_ts_[lk_idx(e.x, e.y, p)].push_back(e.t);
+            const Metavision::timestamp cutoff = (e.t > win) ? (e.t - win) : 0;
+            // Add event timestamp to the histogram, pruning the pixel's own
+            // deque FIRST: events in the sr+d border band `continue` below
+            // without ever reaching the neighborhood prune, so a persistent
+            // edge-band pixel's deque grew without bound (unbounded memory
+            // in long sessions whose activity hugs the border).
+            auto& own = lk_ts_[lk_idx(e.x, e.y, p)];
+            own.push_back(e.t);
+            prune_lk_deque(own, cutoff);
             // Need margin of sr + d from border for central first-order derivatives.
             if (e.x < sr + d || e.x >= width_ - sr - d ||
                 e.y < sr + d || e.y >= height_ - sr - d) {
@@ -314,8 +321,6 @@ private:
             for (int jj = -sr - d; jj <= sr + d; ++jj) {
                 for (int ii = -sr - d; ii <= sr + d; ++ii) {
                     auto& dq = lk_ts_[lk_idx(e.x + ii, e.y + jj, p)];
-                    const Metavision::timestamp cutoff =
-                        (e.t > win) ? (e.t - win) : 0;
                     prune_lk_deque(dq, cutoff);
                 }
             }
