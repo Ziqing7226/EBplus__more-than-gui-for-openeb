@@ -88,6 +88,15 @@ public:
                 update_motion(e, r);
             }
         }
+        // Decay toward zero every batch: the overlay is meant to show
+        // RECENT direction distribution ("over the current batch" per the
+        // accessor comment), but the counters only ever grew -- the text
+        // climbed without bound (signed overflow on long sessions) and the
+        // dominant direction locked in early. Same per-batch decay the
+        // orientation filter's histogram uses.
+        if (enable_global_mode_) {
+            for (auto& cnt_bin : global_hist_) cnt_bin = (cnt_bin * 9) / 10;
+        }
         return dir;
     }
 

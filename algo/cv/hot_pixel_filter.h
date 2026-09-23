@@ -205,7 +205,11 @@ private:
     std::vector<std::uint32_t> counts_;
     std::vector<Metavision::timestamp> last_ts_;
     std::vector<float> isi_;           // per-pixel IIR-smoothed ISI (FPN)
-    float avg_isi_{0.0F};              // global mean ISI (FPN reference)
+    // jAER ProbFPNCorrectionFilter initializes avgIsi to a huge ISI
+    // (DEFAULT_ISI = 1e7): the first events are then rejected until the
+    // average settles, instead of the old 0-init where p = alpha*isi/max(avg,eps)
+    // >> 1 let everything through during warm-up.
+    float avg_isi_{1e7F};              // global mean ISI (FPN reference)
     static constexpr float kDefaultIsi = 1e7F;  // jAER DEFAULT_ISI (10 s)
     std::vector<std::uint8_t> hot_mask_;
     std::uint64_t total_events_{0};

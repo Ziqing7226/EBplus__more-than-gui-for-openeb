@@ -305,6 +305,10 @@ public:
     int num_neurons_y() const { return num_neurons_y_; }
 
     void set_tau_ms(float v) {
+        // A zero tau turns the decay exp((gt - ts)/tau) into 0/0 = NaN at
+        // the first pair of equal timestamps (ALPDATA-style constant-t
+        // streams). The GUI range clamps to >= 1 ms, this guards the API.
+        if (v < 0.001f) v = 0.001f;
         tau_us_ = static_cast<Metavision::timestamp>(v * 1000.0f);
         lif_.set_tau_us(tau_us_);
     }
