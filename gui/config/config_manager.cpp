@@ -229,7 +229,14 @@ bool ConfigManager::apply_esp(CameraController* c, const QJsonObject& o, QString
                                            static_cast<uint32_t>(a.value("band_high").toInt()));
                 } catch (...) { ok = false; }
             }
-            if (a.contains("enabled")) af->enable(a.value("enabled").toBool());
+            if (a.contains("enabled")) {
+                // enable() is a register write: a failing device throws
+                // HalException, which must not escape into the Qt event
+                // loop (std::terminate). Same guard as the setters above
+                // and as apply_trigger.
+                try { af->enable(a.value("enabled").toBool()); }
+                catch (...) { ok = false; }
+            }
         }
     }
     if (o.contains("trail_filter")) {
@@ -247,7 +254,10 @@ bool ConfigManager::apply_esp(CameraController* c, const QJsonObject& o, QString
                 try { tf->set_threshold(static_cast<uint32_t>(t.value("threshold").toVariant().toLongLong())); }
                 catch (...) { ok = false; }
             }
-            if (t.contains("enabled")) tf->enable(t.value("enabled").toBool());
+            if (t.contains("enabled")) {
+                try { tf->enable(t.value("enabled").toBool()); }
+                catch (...) { ok = false; }
+            }
         }
     }
     if (o.contains("erc")) {
@@ -258,7 +268,10 @@ bool ConfigManager::apply_esp(CameraController* c, const QJsonObject& o, QString
                 try { erc->set_cd_event_rate(static_cast<uint32_t>(e.value("target_rate").toVariant().toLongLong())); }
                 catch (...) { ok = false; }
             }
-            if (e.contains("enabled")) erc->enable(e.value("enabled").toBool());
+            if (e.contains("enabled")) {
+                try { erc->enable(e.value("enabled").toBool()); }
+                catch (...) { ok = false; }
+            }
         }
     }
     return ok;
