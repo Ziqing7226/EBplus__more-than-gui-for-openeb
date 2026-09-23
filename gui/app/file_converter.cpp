@@ -247,6 +247,14 @@ void FileConverter::run_convert(const QString& src, const QString& dst, Format f
     }
     if (csvs) csvs->flush();
     if (csvf) csvf->close();
+    // QTextStream reports write failures (disk full, IO error) through
+    // status(), it never throws -- without this check a truncated CSV was
+    // reported as Done.
+    if (csvs && csvs->status() != QTextStream::Ok) {
+        callback_error_msg = tr("Write error while writing CSV output "
+                                "(disk full or IO error?).").toStdString();
+        callback_error.store(true, std::memory_order_release);
+    }
 
     if (callback_error.load(std::memory_order_acquire)) {
         QMetaObject::invokeMethod(this, [this, msg = callback_error_msg]() {
@@ -344,10 +352,12 @@ void FileConverter::run_cut(const QString& src, const QString& dst,
                 if (end_us > 0 && it_begin != e && (e - 1)->t > end_us) {
                     auto it = it_begin;
                     while (it != e && it->t <= end_us) ++it;
-                    writer.add_events(it_begin, it);
+                    if (!writer.add_events(it_begin, it)) {
+                        callback_error.store(true, std::memory_order_release);
+                    }
                     reached_end.store(true, std::memory_order_release);
-                } else {
-                    writer.add_events(it_begin, e);
+                } else if (!writer.add_events(it_begin, e)) {
+                    callback_error.store(true, std::memory_order_release);
                 }
             } catch (const std::exception& ex) {
                 // Store error for the polling loop to pick up
@@ -389,7 +399,8 @@ void FileConverter::run_cut(const QString& src, const QString& dst,
 
     if (callback_error.load(std::memory_order_acquire)) {
         QMetaObject::invokeMethod(this, [this]() {
-            emit failed(tr("Cut failed: error in streaming callback."));
+            emit failed(tr("Cut failed: error in streaming callback or "
+                           "output write."));
         }, Qt::QueuedConnection);
         return;
     }
