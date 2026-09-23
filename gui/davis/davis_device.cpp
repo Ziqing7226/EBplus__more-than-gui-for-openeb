@@ -813,10 +813,11 @@ void Device::configure_idle() {
         spi_config_send(MODULE_APS, APS_GSTXFALL, 100);
         spi_config_send(MODULE_APS, APS_GSFDRESET, 300);
     }
-    // Reference init: setExposureDuration(20 ms). Without an initial value
-    // the camera streams at its firmware-default exposure until the AEC
-    // converges (the color 346 flashed saturated frames during that window
-    // on a fresh power-on).
+    // Reference init: setExposureDuration(20 ms) — exposure times are
+    // programmed in ADC-clock ticks on the FPGA (davis.hpp: "cycles @
+    // ADC_CLOCK_FREQ"). Without an initial value the camera streams at its
+    // firmware-default exposure until the AEC converges (the color 346
+    // flashed saturated frames during that window on a fresh power-on).
     spi_config_send(MODULE_APS, APS_EXPOSURE, exposure_ticks(20000.0, adc_clock_));
     spi_config_send(MODULE_APS, APS_RUN, false);
     spi_config_send(MODULE_APS, APS_START_COLUMN_0, 0);
@@ -824,9 +825,6 @@ void Device::configure_idle() {
     spi_config_send(MODULE_APS, APS_END_COLUMN_0, static_cast<std::uint32_t>(width_ - 1));
     spi_config_send(MODULE_APS, APS_END_ROW_0, static_cast<std::uint32_t>(height_ - 1));
     spi_config_send(MODULE_APS, APS_RUN, false);
-    // 20 ms exposure + free-run interval, in ADC-clock ticks.
-    spi_config_send(MODULE_APS, APS_EXPOSURE,
-        static_cast<std::uint32_t>(std::llround(20000.0F * logic_clock_)));
     // Seed the AEC state with the exposure just programmed (20000 us) —
     // starting from 0 would clamp every correction to the µs floor.
     aec_exposure_us_ = 20000.0;
