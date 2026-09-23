@@ -450,6 +450,22 @@ void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn,
 
 bool Aedat4FileSource::read_aps_frame_for_position(std::int64_t position_us,
                                                    davis::ApsFrame& out) {
+    // Runs on the GUI thread (the APS window's 30 Hz tick). A corrupt LZ4
+    // frame header claims an arbitrary content size and the decoder's
+    // reserve() can throw — an exception escaping into the Qt event loop
+    // would terminate the process (the run() path already has this guard;
+    // keep parity here and treat any failure as "no frame").
+    try {
+        return read_aps_frame_for_position_impl(position_us, out);
+    } catch (const std::exception&) {
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool Aedat4FileSource::read_aps_frame_for_position_impl(std::int64_t position_us,
+                                                        davis::ApsFrame& out) {
     if (aps_index_.empty() || !ev_t0_known_) return false;
     const std::int64_t target = position_us + ev_t0_;
     if (target < aps_index_.front().t) {

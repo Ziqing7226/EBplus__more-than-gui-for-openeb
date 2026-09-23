@@ -42,6 +42,10 @@ public:
     /// or before @p position_us using the packet index built during open().
     bool read_aps_frame_for_position(std::int64_t position_us,
                                      davis::ApsFrame& out) override;
+    /// Exception barrier over the impl (runs on the GUI thread — an
+    /// escaping exception would terminate the process).
+    bool read_aps_frame_for_position_impl(std::int64_t position_us,
+                                          davis::ApsFrame& out);
 
 private:
     struct PacketInfo {
