@@ -1674,9 +1674,14 @@ TEST(ImuPoseFilter, SlowPanDoesNotCorruptTheBias) {
     }
     // A 5 deg/s pan held SUSTAINED is bias by definition: the estimate
     // absorbs it (bias_y → 5 + by) and the corrected rate vanishes, so the
-    // display stops following the pan.
+    // display stops following the pan. The axes the pan does NOT excite
+    // must stay exactly where the rest phase froze them.
     EXPECT_NEAR(pose.bias_y_dps(), rate + by, 0.3)
         << "sustained slow-pan rate was not absorbed: " << pose.bias_y_dps();
+    EXPECT_NEAR(pose.bias_x_dps(), frozen_x, 0.02)
+        << "pan leaked into the frozen bias_x: " << pose.bias_x_dps();
+    EXPECT_NEAR(pose.bias_z_dps(), frozen_z, 0.02)
+        << "pan leaked into the frozen bias_z: " << pose.bias_z_dps();
     for (int i = 0; i < 3500; ++i, t += 1000) {
         double ux, uy, uz;
         inv_rot(q_true, 0, 0, 1, &ux, &uy, &uz);
