@@ -9,9 +9,10 @@
 // EventPacket: one field, VT4 = vector of 16-byte structs
 //   {i64 t; i16 x; i16 y; u8 polarity; 3 pad}. IOHeader: VT4 = i32
 //   compression (0 = NONE), VT6 = i64 dataTablePosition, VT8 = string
-//   sourceInfo. DataTable ("FTAB"): VT4 = vector of entry tables, each
-//   {VT6 = struct{i32 streamID; i32 size}, VT8 = i64 numEvents,
-//   VT10 = i64 tsStart, VT12 = i64 tsEnd}.
+//   sourceInfo. DataTable ("FTAB"): VT4 = vector of dv FileDataDefinition
+//   entry tables, each {VT4 = i64 byteOffset (absolute, packet body),
+//   VT6 = struct{i32 streamID; i32 size}, VT8 = i64 numEvents,
+//   VT10 = i64 tsStart, VT12 = i64 tsEnd} — dv's reader seeks by ByteOffset.
 
 #include "aedat4_writer.h"
 
@@ -213,13 +214,20 @@ std::size_t build_io_header(std::vector<std::uint8_t>& out, std::int64_t table_p
 
 /// DataTable — [0] u32 root → table@8; [4] "FTAB"; table@8 {soffset −8 →
 /// vtable@16; VT4 u32@12 → vector@24}; vtable@16; [24] count; [28] slots
-/// (u32 forward displacements); entry tables (E ≡ 4 mod 8, vtable after
-/// each entry): [i32 soffset][i32 streamID][i32 size][i32 pad][i64 num]
-/// [i64 ts0][i64 ts1].
+/// (u32 forward displacements); entry tables per dv FileDataTable.fbs
+/// (E ≡ 0 mod 8, vtable after each entry, soffset negative):
+///   FileDataDefinition { ByteOffset: int64; PacketInfo: {i32 streamID;
+///   i32 size} (native_inline); NumElements: int64; TimestampStart: int64;
+///   TimestampEnd: int64 }
+/// layout: [soffset][pad4][PacketInfo @8][ByteOffset @16][num @24]
+/// [ts0 @32][ts1 @40 (ends @48)], table size 48, vtable@48 (14 B).
+/// ByteOffset is the absolute file offset of the packet body — dv's reader
+/// seeks by it (writer.hpp passes mByteOffset + sizeof(PacketHeader));
+/// leaving it absent (0) makes dv read every packet from the file head.
 void build_data_table(std::vector<std::uint8_t>& out,
                       const std::vector<Aedat4Writer::Entry>& entries) {
     const std::size_t slots = 28 + 4 * entries.size();
-    out.reserve(slots + entries.size() * 48 + 16);
+    out.reserve(slots + entries.size() * 64 + 16);
     out.assign(slots, 0);
 
     put_u32(out, 0, 8);    // root → table
@@ -232,25 +240,29 @@ void build_data_table(std::vector<std::uint8_t>& out,
     put_u32(out, 24, static_cast<std::uint32_t>(entries.size()));
 
     for (std::size_t i = 0; i < entries.size(); ++i) {
-        while ((out.size() + 12) % 8 != 0) out.push_back(0);
+        while (out.size() % 8 != 0) out.push_back(0);
         const std::size_t slot = 28 + 4 * i;
         const std::size_t entry = out.size();
-        const std::size_t vtable = entry + 36;
+        const std::size_t vtable = entry + 48;
         out.resize(vtable + 14);
         put_u32(out, slot, static_cast<std::uint32_t>(entry - slot));
         put_i32_at(out, entry, static_cast<std::int32_t>(entry - vtable));
-        put_i32_at(out, entry + 4, entries[i].sid);  // VT6 struct: streamID
-        put_i32_at(out, entry + 8, entries[i].size);
-        std::memcpy(out.data() + entry + 12, &entries[i].num, 8);   // VT8
-        std::memcpy(out.data() + entry + 20, &entries[i].ts0, 8);   // VT10
-        std::memcpy(out.data() + entry + 28, &entries[i].ts1, 8);   // VT12
+        // VT6: PacketInfo native_inline struct {i32 streamID; i32 size} @8.
+        put_i32_at(out, entry + 8, entries[i].sid);
+        put_i32_at(out, entry + 12, entries[i].size);
+        // VT4: ByteOffset i64 @16.
+        std::memcpy(out.data() + entry + 16, &entries[i].offset, 8);
+        // VT8/VT10/VT12: num/ts0/ts1 i64 @24/32/40.
+        std::memcpy(out.data() + entry + 24, &entries[i].num, 8);
+        std::memcpy(out.data() + entry + 32, &entries[i].ts0, 8);
+        std::memcpy(out.data() + entry + 40, &entries[i].ts1, 8);
         put_u16(out, vtable, 14);
-        put_u16(out, vtable + 2, 36);
-        put_u16(out, vtable + 4, 0);
-        put_u16(out, vtable + 6, 4);
-        put_u16(out, vtable + 8, 12);
-        put_u16(out, vtable + 10, 20);
-        put_u16(out, vtable + 12, 28);
+        put_u16(out, vtable + 2, 48);
+        put_u16(out, vtable + 4, 16);   // VT4  ByteOffset
+        put_u16(out, vtable + 6, 8);    // VT6  PacketInfo
+        put_u16(out, vtable + 8, 24);   // VT8  NumElements
+        put_u16(out, vtable + 10, 32);  // VT10 TimestampStart
+        put_u16(out, vtable + 12, 40);  // VT12 TimestampEnd
     }
 }
 
@@ -332,6 +344,7 @@ bool Aedat4Writer::open(const std::string& path, int width, int height,
         return false;
     }
     file_ = f;
+    byte_offset_ = std::ftell(f);
     total_events_ = 0;
     pending_.clear();
     entries_.clear();
@@ -375,11 +388,13 @@ void Aedat4Writer::write_aps(const davis::ApsFrame& f) {
     const auto fb_size = static_cast<std::int32_t>(packet.size());
     const auto body_size = static_cast<std::int32_t>(packet.size() + 4);
     const std::int32_t header[3] = {2, body_size, fb_size};
+    const auto body_offset = static_cast<std::int64_t>(byte_offset_ + 8);
     if (std::fwrite(header, 4, 3, file_) != 3 ||
         std::fwrite(packet.data(), 1, packet.size(), file_) != packet.size()) {
         return;
     }
-    entries_.push_back({2, body_size, 1, f.t, f.t});
+    byte_offset_ += 8 + body_size;
+    entries_.push_back({2, body_size, 1, f.t, f.t, body_offset});
 }
 
 void Aedat4Writer::flush_imu_locked() {
@@ -393,11 +408,14 @@ void Aedat4Writer::flush_imu_locked() {
     const std::int64_t ts1 = imu_pending_.back().t;
     const auto n = static_cast<std::int64_t>(imu_pending_.size());
     imu_pending_.clear();
+    const auto body_offset = static_cast<std::int64_t>(byte_offset_ + 8);
     if (std::fwrite(header, 4, 3, file_) != 3 ||
         std::fwrite(packet.data(), 1, packet.size(), file_) != packet.size()) {
         return;
     }
-    entries_.push_back({1, body_size, n, std::min(ts0, ts1), std::max(ts0, ts1)});
+    byte_offset_ += 8 + body_size;
+    entries_.push_back({1, body_size, n, std::min(ts0, ts1), std::max(ts0, ts1),
+                        body_offset});
 }
 
 void Aedat4Writer::flush_locked() {
@@ -410,14 +428,17 @@ void Aedat4Writer::flush_locked() {
     const auto fb_size = static_cast<std::int32_t>(packet.size());
     const auto body_size = static_cast<std::int32_t>(packet.size() + 4);
     const std::int32_t header[3] = {0, body_size, fb_size};
+    std::int64_t ts0 = pending_.front().t;
+    std::int64_t ts1 = pending_.back().t;
+    if (ts1 < ts0) std::swap(ts0, ts1);
+    const auto body_offset = static_cast<std::int64_t>(byte_offset_ + 8);
     if (std::fwrite(header, 4, 3, file_) != 3 ||
         std::fwrite(packet.data(), 1, packet.size(), file_) != packet.size()) {
         return;  // write failure: keep pending_ (a later flush retries)
     }
-    std::int64_t ts0 = pending_.front().t;
-    std::int64_t ts1 = pending_.back().t;
-    if (ts1 < ts0) std::swap(ts0, ts1);
-    entries_.push_back({0, body_size, static_cast<std::int64_t>(pending_.size()), ts0, ts1});
+    byte_offset_ += 8 + body_size;
+    entries_.push_back({0, body_size, static_cast<std::int64_t>(pending_.size()),
+                        ts0, ts1, body_offset});
     total_events_ += pending_.size();
     pending_.clear();
 }

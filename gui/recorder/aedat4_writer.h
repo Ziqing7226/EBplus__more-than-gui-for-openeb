@@ -32,6 +32,10 @@ public:
         std::int64_t num;
         std::int64_t ts0;
         std::int64_t ts1;
+        std::int64_t offset;  ///< absolute file offset of the packet BODY
+                              ///< (dv FileDataDefinition.ByteOffset — the
+                              ///< field dv seeks by; without it dv reads
+                              ///< every packet at file position 0).
     };
 
     Aedat4Writer() = default;
@@ -82,6 +86,10 @@ private:
     static constexpr std::size_t kImuFlushSamples = 64;
     std::vector<Entry> entries_;
     std::streamoff table_pos_field_{0};  ///< IOHeader dataTablePosition slot.
+    std::streamoff byte_offset_{0};      ///< Running file position of the next
+                                         ///< packet header (FTAB ByteOffset
+                                         ///< source; mtx_-guarded like all
+                                         ///< mutable state).
     std::uint64_t total_events_{0};
 };
 

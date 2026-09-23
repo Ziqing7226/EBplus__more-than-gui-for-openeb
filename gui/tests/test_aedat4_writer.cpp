@@ -232,3 +232,100 @@ TEST(Aedat4Writer, WriteAfterCloseIsIgnored) {
     EXPECT_TRUE(read_back.empty());  // nothing was recorded
     std::filesystem::remove(path);
 }
+
+namespace {
+
+std::uint16_t rd16(const std::vector<std::uint8_t>& b, std::size_t at) {
+    return static_cast<std::uint16_t>(b[at]) |
+           static_cast<std::uint16_t>(static_cast<std::uint16_t>(b[at + 1]) << 8);
+}
+std::uint32_t rd32(const std::vector<std::uint8_t>& b, std::size_t at) {
+    std::uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) v |= static_cast<std::uint32_t>(b[at + i]) << (8 * i);
+    return v;
+}
+std::int64_t rd64(const std::vector<std::uint8_t>& b, std::size_t at) {
+    std::uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(b[at + i]) << (8 * i);
+    return static_cast<std::int64_t>(v);
+}
+
+} // namespace
+
+TEST(Aedat4Writer, DataTableByteOffsetsPointAtPackets) {
+    // dv's reader seeks every packet by FileDataDefinition.ByteOffset (the
+    // absolute offset of the packet BODY, written as mByteOffset +
+    // sizeof(PacketHeader)). Without that field dv reads each packet at file
+    // position 0 and rejects the file outright. This walks the FTAB with an
+    // independent vtable lookup (NOT our reader, which ignores ByteOffset)
+    // and checks each entry's ByteOffset lands on its own packet header.
+    const std::string path =
+        (std::filesystem::temp_directory_path() / "ebplus_aedat4_off.aedat4").string();
+
+    gui::Aedat4Writer writer;
+    ASSERT_TRUE(writer.open(path, 346, 260, "TEST-OFFSET"));
+    for (int pkt = 0; pkt < 3; ++pkt) {
+        std::vector<Metavision::EventCD> evs(2500);  // > 2048 flush threshold
+        for (std::size_t i = 0; i < evs.size(); ++i) {
+            evs[i].t = 1000LL * pkt + static_cast<std::int64_t>(i);
+            evs[i].x = static_cast<std::uint16_t>(i % 346);
+            evs[i].y = static_cast<std::uint16_t>(i % 260);
+            evs[i].p = 1;
+        }
+        writer.write(evs.data(), evs.data() + evs.size());
+    }
+    writer.close();
+
+    std::ifstream in(path, std::ios::binary);
+    ASSERT_TRUE(in.good());
+    const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(in),
+                                          std::istreambuf_iterator<char>()};
+    in.close();
+    ASSERT_GT(bytes.size(), 14u + 4u);
+    EXPECT_EQ(std::string(bytes.begin(), bytes.begin() + 14), "#!AER-DAT4.0\r\n");
+
+    // IOHeader buffer sits at [14 magic][u32 ioSize]; its dataTablePosition
+    // i64 is at IOHeader-relative offset 24 (writer's build_io_header).
+    const std::size_t io_at = 14 + 4;
+    const std::size_t ftab_at = static_cast<std::size_t>(rd64(bytes, io_at + 24));
+    ASSERT_LT(ftab_at + 4 + 8, bytes.size());
+    ASSERT_EQ(rd32(bytes, ftab_at + 4), 8u);  // FTAB root → table@8
+    EXPECT_EQ(std::string(bytes.begin() + ftab_at + 8, bytes.begin() + ftab_at + 12),
+              "FTAB");
+
+    // table@8: soffset −8 → vtable@16; VT4@12 → vector@24. All buffer
+    // offsets sit after the region-size u32, i.e. at ftab_at + 4 + rel.
+    const std::size_t vec = ftab_at + 4 + 24;
+    const std::uint32_t count = rd32(bytes, vec);
+    ASSERT_GE(count, 3u);
+    std::int64_t prev_end = 0;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const std::size_t slot = vec + 4 + 4 * i;
+        const std::size_t entry = slot + rd32(bytes, slot);
+        // vtable lookup: vtable = entry − soffset; the soffset is NEGATIVE
+        // (the vtable trails the table), so this lands at entry + |soffset|.
+        const std::int32_t soffset = static_cast<std::int32_t>(rd32(bytes, entry));
+        ASSERT_LT(soffset, 0);  // vtable trails the table in dv's FTAB
+        const std::size_t vtable = entry + static_cast<std::size_t>(-soffset);
+        const std::uint16_t off_info = rd16(bytes, vtable + 6);
+        const std::uint16_t off_byte = rd16(bytes, vtable + 4);
+        ASSERT_NE(off_info, 0) << "entry " << i << ": PacketInfo missing";
+        ASSERT_NE(off_byte, 0) << "entry " << i << ": ByteOffset missing";
+        const std::int32_t sid = static_cast<std::int32_t>(rd32(bytes, entry + off_info));
+        const std::int32_t size = static_cast<std::int32_t>(rd32(bytes, entry + off_info + 4));
+        const std::int64_t byte_offset = rd64(bytes, entry + off_byte);
+        ASSERT_GT(byte_offset, 0) << "entry " << i;
+        // dv seeks byte_offset − sizeof(PacketHeader) to read the header:
+        // it must carry exactly this entry's stream id and body size.
+        ASSERT_GE(static_cast<std::size_t>(byte_offset), 8u);
+        const std::size_t header_at = static_cast<std::size_t>(byte_offset) - 8;
+        EXPECT_EQ(static_cast<std::int32_t>(rd32(bytes, header_at)), sid)
+            << "entry " << i;
+        EXPECT_EQ(static_cast<std::int32_t>(rd32(bytes, header_at + 4)), size)
+            << "entry " << i;
+        EXPECT_GT(byte_offset, prev_end) << "entries must ascend";
+        prev_end = byte_offset + size;
+    }
+    EXPECT_LE(prev_end, static_cast<std::int64_t>(ftab_at));
+    std::filesystem::remove(path);
+}
