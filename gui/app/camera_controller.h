@@ -135,11 +135,17 @@ public:
     using RawTap = std::function<void(const Metavision::EventCD*, const Metavision::EventCD*)>;
     void set_raw_tap(RawTap tap);
     /// Recording taps for the inivation side streams (IMU samples / APS
-    /// frames) — invoked on the device thread like RawTap.
+    /// frames) — invoked on the device thread like RawTap. Assignment is
+    /// serialized through tap_mutex_ and the call sites invoke a COPY taken
+    /// under that mutex: a plain member assign races the USB/reader thread's
+    /// check-and-call when recording stops while the camera is still
+    /// streaming (the functor can be destroyed mid-call).
     void set_imu_tap(std::function<void(const davis::ImuSample&)> tap) {
+        std::lock_guard<std::mutex> lock(tap_mutex_);
         imu_tap_ = std::move(tap);
     }
     void set_aps_tap(std::function<void(const davis::ApsFrame&)> tap) {
+        std::lock_guard<std::mutex> lock(tap_mutex_);
         aps_tap_ = std::move(tap);
     }
 
@@ -430,6 +436,9 @@ private:
     std::atomic<Metavision::timestamp> file_playback_pos_{-1};
     std::function<void(const davis::ImuSample&)> imu_tap_;
     std::function<void(const davis::ApsFrame&)> aps_tap_;
+    /// Serializes tap installation/teardown (GUI thread) against the
+    /// device-thread snapshots taken at every tap call site.
+    mutable std::mutex tap_mutex_;
     std::atomic<bool> imu_discovered_{false};
     std::atomic<bool> aps_discovered_{false};
     /// External (non-SDK) file source and its reader thread. Mutually

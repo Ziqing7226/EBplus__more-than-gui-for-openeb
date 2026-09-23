@@ -64,6 +64,7 @@ public:
     void set_event_sink(EventSink sink);
     /// Recording tap (see davis_device.h raw_consumer_).
     void set_raw_consumer(std::function<void(const Metavision::EventCD*, const Metavision::EventCD*)> cb) {
+        std::lock_guard<std::mutex> lock(raw_consumer_mutex_);
         raw_consumer_ = std::move(cb);
     }
     void set_gone_callback(GoneCallback callback);
@@ -149,6 +150,7 @@ private:
 
     /// Synchronous pre-queue consumer — see davis_device.h (recording tap).
     std::function<void(const Metavision::EventCD*, const Metavision::EventCD*)> raw_consumer_;
+    mutable std::mutex raw_consumer_mutex_;
 
     // Decouples the per-batch event pipeline from the USB reaping thread
     // (IMU stays inline in the parser — latency-critical). Started with

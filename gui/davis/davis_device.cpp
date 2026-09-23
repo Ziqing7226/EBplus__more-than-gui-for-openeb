@@ -480,8 +480,13 @@ void LIBUSB_CALL Device::usb_data_transfer_cb(libusb_transfer* transfer) {
             static_cast<std::size_t>(transfer->actual_length));
         auto slot = self->batches_.acquire();
         self->parser_.swap_batch(*slot);
-        if (self->raw_consumer_) {
-            self->raw_consumer_(slot->data(), slot->data() + slot->size());
+        std::function<void(const Metavision::EventCD*, const Metavision::EventCD*)> consumer;
+        {
+            std::lock_guard<std::mutex> lock(self->raw_consumer_mutex_);
+            consumer = self->raw_consumer_;
+        }
+        if (consumer) {
+            consumer(slot->data(), slot->data() + slot->size());
         }
         self->batches_.submit(std::move(slot));
     }

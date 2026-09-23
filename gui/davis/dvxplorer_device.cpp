@@ -661,8 +661,13 @@ void DvxplorerDevice::parse_events(const std::uint8_t* data, std::size_t size) {
     parse_.decode(data, size);
     auto slot = batches_.acquire();
     parse_.swap_batch(*slot);
-    if (raw_consumer_) {
-        raw_consumer_(slot->data(), slot->data() + slot->size());
+    std::function<void(const Metavision::EventCD*, const Metavision::EventCD*)> consumer;
+    {
+        std::lock_guard<std::mutex> lock(raw_consumer_mutex_);
+        consumer = raw_consumer_;
+    }
+    if (consumer) {
+        consumer(slot->data(), slot->data() + slot->size());
     }
     batches_.submit(std::move(slot));
 }

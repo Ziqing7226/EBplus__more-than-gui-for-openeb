@@ -862,8 +862,15 @@ long CameraController::imu_sample_count() const {
 
 void CameraController::on_imu_sample(const davis::ImuSample& sample) {
     // Recording tap FIRST (like the event raw_tap_): the AEDAT4 file gets
-    // the device stream regardless of the GUI consumption state.
-    if (imu_tap_) imu_tap_(sample);
+    // the device stream regardless of the GUI consumption state. Snapshot
+    // under tap_mutex_ so a concurrent stop-recording assignment can never
+    // destroy the functor mid-call.
+    std::function<void(const davis::ImuSample&)> imu_tap;
+    {
+        std::lock_guard<std::mutex> lock(tap_mutex_);
+        imu_tap = imu_tap_;
+    }
+    if (imu_tap) imu_tap(sample);
 #if GUI_HAVE_DAVIS
     std::lock_guard<std::mutex> lock(imu_mutex_);
     imu_latest_ = sample;
@@ -984,7 +991,12 @@ long CameraController::aps_frame_count() const {
 }
 
 void CameraController::on_aps_frame(const davis::ApsFrame& frame) {
-    if (aps_tap_) aps_tap_(frame);
+    std::function<void(const davis::ApsFrame&)> aps_tap;
+    {
+        std::lock_guard<std::mutex> lock(tap_mutex_);
+        aps_tap = aps_tap_;
+    }
+    if (aps_tap) aps_tap(frame);
 #if GUI_HAVE_DAVIS
     std::lock_guard<std::mutex> lock(aps_mutex_);
     aps_latest_ = frame;
@@ -999,6 +1011,7 @@ facility::CameraSync* CameraController::camera_sync_facility() {
 }
 
 void CameraController::set_raw_tap(RawTap tap) {
+    std::lock_guard<std::mutex> lock(tap_mutex_);
     raw_tap_ = std::move(tap);
 #if GUI_HAVE_DAVIS
     // The recorder must see the batch on the USB decode thread, BEFORE the
@@ -1007,13 +1020,23 @@ void CameraController::set_raw_tap(RawTap tap) {
     if (davis_device_) {
         davis_device_->set_raw_consumer(
             [this](const Metavision::EventCD* b, const Metavision::EventCD* e) {
-                if (raw_tap_) raw_tap_(b, e);
+                RawTap tap;
+                {
+                    std::lock_guard<std::mutex> lock(tap_mutex_);
+                    tap = raw_tap_;
+                }
+                if (tap) tap(b, e);
             });
     }
     if (dvx_device_) {
         dvx_device_->set_raw_consumer(
             [this](const Metavision::EventCD* b, const Metavision::EventCD* e) {
-                if (raw_tap_) raw_tap_(b, e);
+                RawTap tap;
+                {
+                    std::lock_guard<std::mutex> lock(tap_mutex_);
+                    tap = raw_tap_;
+                }
+                if (tap) tap(b, e);
             });
     }
 #endif

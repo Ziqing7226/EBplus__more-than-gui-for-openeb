@@ -66,9 +66,11 @@ public:
 
     void set_event_sink(EventSink sink);
     /// Recording tap (see raw_consumer_). Callable while streaming: the
-    /// write races the USB-thread reads the same benign way the controller's
-    /// raw_tap_ member always has (rare start/stop assignment).
+    /// assignment is serialized through raw_consumer_mutex_ and the decode
+    /// callback invokes a snapshot copy, so a concurrent start/stop can
+    /// never destroy the functor mid-call.
     void set_raw_consumer(std::function<void(const Metavision::EventCD*, const Metavision::EventCD*)> cb) {
+        std::lock_guard<std::mutex> lock(raw_consumer_mutex_);
         raw_consumer_ = std::move(cb);
     }
     void set_gone_callback(GoneCallback callback);
@@ -206,6 +208,7 @@ private:
     /// the AEDAT4 recorder records here so queue overflow (drop-oldest)
     /// can never cost recording data.
     std::function<void(const Metavision::EventCD*, const Metavision::EventCD*)> raw_consumer_;
+    mutable std::mutex raw_consumer_mutex_;
     GoneCallback gone_callback_;
     std::atomic<bool> streaming_{false};
     bool imu_enabled_{false};
