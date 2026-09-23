@@ -232,10 +232,17 @@ private:
         const char* name_p = reinterpret_cast<const char*>(raw.data()) + p;
         const std::string name(name_p, strnlen(name_p, name_size));
         p += pad8(name_size);
-        if (p + dt_size > raw.size()) fail("ALPDATA: corrupt attribute datatype");
+        // dt_size == 0 with p == raw.size() would otherwise pass the check
+        // below and read the class byte one past the buffer, and the
+        // cls 0/1 branch reads 4 bytes at p+4 — demand the full datatype
+        // message plus the size field up front.
+        if (p >= raw.size() || dt_size == 0 || p + dt_size > raw.size()) {
+            fail("ALPDATA: corrupt attribute datatype");
+        }
         const std::uint8_t cls = raw[p] & 0x0F;
         std::size_t dt_data_size = 0;
         if (cls == 0 || cls == 1) {
+            if (dt_size < 8) fail("ALPDATA: corrupt attribute datatype");
             std::uint32_t sz;
             std::memcpy(&sz, raw.data() + p + 4, 4);
             dt_data_size = sz;
@@ -605,6 +612,15 @@ void AlpdataFileSource::run(EventSink sink, DoneFn done) {
                             ev.x = static_cast<std::uint16_t>(x0 + q);
                             ev.y = y;
                             ev.p = p;
+                            // The SDK frame generator and the algorithm
+                            // backends index buffers sized by the bin-group
+                            // geometry WITHOUT per-event bounds checks; a
+                            // frame header disagreeing with the bin-group
+                            // attributes (corrupt/heterogeneous file) must
+                            // not reach them (mirrors the AEDAT4 reader).
+                            if (ev.x >= meta_.width || ev.y >= meta_.height) {
+                                continue;
+                            }
                             batch.push_back(ev);
                         }
                     }
