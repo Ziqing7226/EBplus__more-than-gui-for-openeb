@@ -486,6 +486,22 @@ void ExporterController::run_hdf5_external(const ExportParams& p) {
         fail_cb("Unknown error closing HDF5 file");
     }
 
+    // Distinguish cancel from completion — same contract as run_hdf5 /
+    // run_avi_external: a cancelled export must not emit completed, and the
+    // partial output must not survive on disk looking like a valid file.
+    if (cancel_.load(std::memory_order_acquire)) {
+        QFile::remove(p.output_path);
+        std::string msg;
+        {
+            std::lock_guard<std::mutex> lk(cb_mtx);
+            msg = cb_error;
+        }
+        QMetaObject::invokeMethod(this, [this, msg = std::move(msg)]() {
+            emit failed(msg.empty() ? tr("Export cancelled.")
+                                    : QString::fromUtf8(msg.c_str()));
+        }, Qt::QueuedConnection);
+        return;
+    }
     if (cb_error_flag.load(std::memory_order_acquire)) {
         std::string msg;
         {
