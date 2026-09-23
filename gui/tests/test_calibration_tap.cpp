@@ -98,6 +98,30 @@ TEST_F(CalibrationTapTest, OldBatchesBeyondKeepWindowAreDropped) {
 // The absolute safety valve: even with batches that never age out (all at the
 // same timestamp — the time trim cannot evict them), the tap must stop
 // retaining beyond kMaxTotalEvents worth of events.
+TEST_F(CalibrationTapTest, EpochResetDropsStaleBatches) {
+    // Camera stop/start rebases the timestamp epoch to 0 while the wizard
+    // stays open. The stale previous-epoch batches have timestamps that
+    // dwarf the new epoch, defeating both the time-based trim and the
+    // drain's stale-batch skip: every capture would mix pre-restart scene
+    // with the new window. The tap must drop the old epoch on detection.
+    constexpr int kEv = 256;
+    // Epoch 1: batches at t = 1 s .. 1.2 s ("old" scene).
+    for (Metavision::timestamp t = 1'000'000; t <= 1'200'000; t += 10'000) {
+        tap_.on_events_ready(make_batch(t, kEv));
+    }
+    // Epoch 2 (restart): timestamps restart near 0.
+    for (Metavision::timestamp t = 0; t <= 100'000; t += 10'000) {
+        tap_.on_events_ready(make_batch(t, kEv));
+    }
+    std::vector<Metavision::EventCD> out;
+    const std::size_t n = tap_.drain_last_window(100'000, out);
+    EXPECT_GT(n, 0u);
+    EXPECT_EQ(n, 11u * kEv);  // only epoch-2 batches survive
+    for (const auto& e : out) {
+        EXPECT_LT(e.t, 1'000'000) << "stale epoch-1 event survived the reset";
+    }
+}
+
 TEST_F(CalibrationTapTest, TotalEventSafetyValveBoundsRunaway) {
     constexpr Metavision::timestamp t = 42'000'000;
     // 40 M events in 256-event batches, all timestamped identically (the

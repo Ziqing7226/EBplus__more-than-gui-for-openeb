@@ -85,6 +85,14 @@ private:
     /// Ring of recent batches (shared_ptr — no per-event copy on the SDK
     /// thread). Batches are in chronological order by arrival.
     std::deque<BatchPtr> batches_;
+    /// Last timestamp seen on the SDK thread. A batch arriving with an
+    /// EARLIER timestamp means the device restarted its timestamp epoch
+    /// (every DAVIS/DVX start() rebases the stream to 0): the stale
+    /// previous-epoch batches then defeat both the time-based trim and the
+    /// drain's whole-batch-stale skip forever (their timestamps dwarf the
+    /// new epoch's), so every capture would mix pre-restart scene with the
+    /// new window and copy the whole stale backlog. Cleared on detection.
+    Metavision::timestamp last_back_t_{-1};
     /// Total events currently held in batches_ (maintained incrementally;
     /// backs the kMaxTotalEvents memory safety valve below).
     std::size_t total_events_{0};

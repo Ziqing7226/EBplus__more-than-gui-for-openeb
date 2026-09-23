@@ -54,6 +54,14 @@ void CalibrationEventTap::on_events_ready(
     // runs only once per Space press.
     if (!events || events->empty()) return;
     std::lock_guard<std::mutex> lk(mutex_);
+    if (events->front().t < last_back_t_) {
+        // Timestamp epoch reset (camera stop/start/reconnect while the
+        // wizard is open): drop the entire previous epoch, or it would
+        // poison every capture until the wizard is reopened.
+        batches_.clear();
+        total_events_ = 0;
+    }
+    last_back_t_ = events->back().t;
     batches_.push_back(events);  // shared_ptr copy — refcount only
     total_events_ += events->size();
 
