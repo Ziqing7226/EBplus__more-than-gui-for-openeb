@@ -219,13 +219,18 @@ private:
             // Leaky mass: mass = 1 + mass * exp(-dt / tau) (jAER
             // clusterMassDecayTauUs).
             {
-                const float dt_m = e.t > prev_t
-                    ? static_cast<float>(e.t - prev_t) : 0.0F;
-                mass_ = 1.0F + mass_ * std::exp(-dt_m /
-                                static_cast<float>(mass_decay_tau_us_));
+                // jAER updateMass accumulates only across distinct
+                // timestamps; simultaneous events (ALPDATA frames, seek
+                // bursts) would pump the mass +1 per event with no decay
+                // and instantly cross the visibility threshold.
+                if (e.t > prev_t) {
+                    mass_ = 1.0F + mass_ * std::exp(
+                        -static_cast<float>(e.t - prev_t) /
+                        static_cast<float>(mass_decay_tau_us_));
+                }
             }
             push_recent(e);
-            update_rct(e, prev_t);
+            update_rct(e);
             update_velocity(e);
             maybe_push_trajectory(e);
         }
@@ -251,8 +256,11 @@ private:
                 // (§四-S1): without this, a noisy velocity estimate
                 // integrated over a whole packet gap threw the cluster
                 // hundreds of px away and every packet spawned a new cluster.
-                const float dx = vx_ * dt_s;
-                const float dy = vy_ * dt_s;
+                // jAER updateClusterLocations: velocity * dt * factor,
+                // once per packet -- the predictive_velocity_factor lives
+                // here, not in the per-event path.
+                const float dx = vx_ * dt_s * predictive_velocity_factor_;
+                const float dy = vy_ * dt_s * predictive_velocity_factor_;
                 x_ += (dx < -radius_cap_) ? -radius_cap_ :
                       (dx > radius_cap_ ? radius_cap_ : dx);
                 y_ += (dy < -radius_cap_) ? -radius_cap_ :
@@ -328,16 +336,15 @@ private:
             if (recent_.size() > 64) recent_.pop_front();
         }
 
-        void update_rct(const Event& e, Metavision::timestamp prev_t) {
+        void update_rct(const Event& e) {
             const float m = location_mixing_factor_;
-            // Optional predictive velocity advance (jAER predictiveVelocityFactor).
-            if (enable_velocity_prediction_ && prev_t > 0 && e.t > prev_t) {
-                const float dt_s =
-                    static_cast<float>(e.t - prev_t) * 1e-6F;
-                x_ += vx_ * dt_s * predictive_velocity_factor_;
-                y_ += vy_ * dt_s * predictive_velocity_factor_;
-            }
-            // Per-event IIR location mixing (jAER locationMixingFactor).
+            // Per-event IIR location mixing only (jAER Cluster.addEvent ->
+            // updatePosition mixes and measures, it never advances the
+            // location; the velocity extrapolation happens ONCE PER PACKET
+            // in updateClusterLocations -- our age() override). Advancing
+            // per event on top of the per-packet advance doubled the lead
+            // and fed the extrapolated displacement straight into the
+            // velocity estimator (positive feedback).
             x_ = (1.0F - m) * x_ + m * static_cast<float>(e.x);
             y_ = (1.0F - m) * y_ + m * static_cast<float>(e.y);
         }
