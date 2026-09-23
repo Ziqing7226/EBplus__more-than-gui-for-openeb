@@ -444,8 +444,10 @@ void Aedat4FileSource::decode_frame_body(const std::uint8_t* pd, std::size_t pn,
     const std::size_t vec = fb.vector(table, 24);
     if (vec == 0 || w <= 0 || h <= 0 || !fb.valid(vec, 4)) return;
     const std::uint32_t count = fb.u32(vec);
-    if (count != static_cast<std::uint32_t>(w) * static_cast<std::uint32_t>(h) *
-                     static_cast<std::uint32_t>(channels) ||
+    if (vec + 4 > pn ||  // subtraction below must not underflow on a
+                         // vector placed at the very end of the buffer
+        count != static_cast<std::uint32_t>(w) * static_cast<std::uint32_t>(h) *
+                 static_cast<std::uint32_t>(channels) ||
         (pn - vec - 4) < count) {
         return;
     }
@@ -646,7 +648,7 @@ void Aedat4FileSource::run(EventSink sink, DoneFn done) {
             if (vec == 0 || !fb.valid(vec, 4)) continue; // empty packet
             const std::uint32_t count = fb.u32(vec);
             if (count == 0) continue;
-            if ((pn - vec - 4) / 16 < count) {
+            if (vec + 4 > pn || (pn - vec - 4) / 16 < count) {
                 throw std::runtime_error("AEDAT4 event packet truncated");
             }
             batch.clear();

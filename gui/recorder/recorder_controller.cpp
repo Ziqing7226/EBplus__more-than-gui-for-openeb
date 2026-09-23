@@ -139,6 +139,9 @@ bool RecorderController::start_processed(CameraController* controller,
     if (recording_ || !controller || !fp || path.isEmpty()) {
         return false;
     }
+    writer_error_reported_ = false;  // re-arm per recording: one dropped
+                                     // batch must not silence the next
+                                     // session's error report
     // Same guards as raw recording: live source + active stream only. Any
     // live source works here (the processed stream comes from the pipeline,
     // not the SDK camera) — including inivation devices.
