@@ -174,6 +174,18 @@ private:
             }
             c.x = c.x * (1.0F - a) + static_cast<float>(e.x) * a;
             c.y = c.y * (1.0F - a) + static_cast<float>(e.y) * a;
+            // jAER Cluster.updateMass (RectangularClusterTracker): the
+            // STORED mass decays per event and then the event adds 1, so
+            // the steady-state mass is rate × tau (bounded). The original
+            // port only decayed on READ (mass_now), letting the stored mass
+            // grow to the cumulative event count — the age feed-forward
+            // below then multiplies a huge mass by the cluster age and the
+            // int conversion overflows (UB on x86: INT_MIN), throwing the
+            // whole stabilized frame onto one border.
+            if (e.t > c.last_t) {
+                c.mass *= std::exp(-static_cast<float>(e.t - c.last_t) /
+                                   static_cast<float>(mass_decay_tau_us_));
+            }
             c.mass += 1.0F;
             c.last_t = e.t;
         }
@@ -213,7 +225,7 @@ private:
         float weight_sum = 0.0F;
         float avgxloc = 0.0F, avgyloc = 0.0F;
         float avgxv = 0.0F, avgyv = 0.0F;
-        int age_sum = 0;
+        double age_sum = 0.0;
         // SmallAngleTransformFinder accumulators (w=1 per cluster, as in jAER).
         double qy2 = 0.0, qx2 = 0.0, qy = 0.0, qx = 0.0;
         double px = 0.0, py = 0.0, pxqy = 0.0, pyqx = 0.0;
@@ -238,7 +250,7 @@ private:
             // jAER velocityPPt: mass-weighted mean cluster velocity.
             avgxv += c.vx * w;
             avgyv += c.vy * w;
-            age_sum += static_cast<int>((t - c.birth_t) * w);
+            age_sum += static_cast<double>(t - c.birth_t) * w;
             // Small-angle LS accumulators (centered on sensor midpoint).
             const double ppx = static_cast<double>(c.birth_x - sx2_);
             const double ppy = static_cast<double>(c.birth_y - sy2_);
@@ -263,7 +275,11 @@ private:
         avgyloc /= weight_sum;
         // jAER: averageClusterAge = ageSum/weightSum (weighted mean cluster
         // age); velocityPPt = weighted mean velocity.
-        average_cluster_age_ = age_sum / static_cast<int>(weight_sum);
+        // Saturate instead of trusting upstream boundedness: the age feeds
+        // a position offset, so a runaway value would shove every event off
+        // frame (clamped to the border) rather than crash.
+        average_cluster_age_ = std::clamp(
+            age_sum / static_cast<double>(weight_sum), 0.0, 3.6e12);  // ≤ 1 h
         vel_pp_x_ = avgxv / weight_sum;
         vel_pp_y_ = avgyv / weight_sum;
         float inst_tx = -avgxloc;
