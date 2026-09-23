@@ -78,14 +78,20 @@ bool RecorderController::start(CameraController* controller, const QString& path
             writer->write(b, e);
             written_events_ += static_cast<std::uint64_t>(e - b);
         });
-        // The recorded IMU/APS streams follow the device streams (written
-        // regardless of the GUI consumption checkboxes, like events).
-        controller->set_imu_tap([writer](const davis::ImuSample& s) {
-            writer->write_imu(s);
-        });
-        controller->set_aps_tap([writer](const davis::ApsFrame& f) {
-            writer->write_aps(f);
-        });
+        // The side streams enter the file only when the dialog declared
+        // them: the writer's XML/FTAB list exactly the checked streams, so
+        // an unchecked-but-streaming side stream must NOT be tapped (it
+        // would put undeclared stream data into the file).
+        if (include_imu_) {
+            controller->set_imu_tap([writer](const davis::ImuSample& s) {
+                writer->write_imu(s);
+            });
+        }
+        if (include_aps_ && controller->source_capabilities().aps) {
+            controller->set_aps_tap([writer](const davis::ApsFrame& f) {
+                writer->write_aps(f);
+            });
+        }
         controller_ = controller;
         path_ = path;
         recording_ = true;
