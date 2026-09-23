@@ -144,7 +144,7 @@ Available from the File Tools panel:
 
 - **XYT 3D point cloud** — GPU-accelerated 3D event visualization (`SpaceTimeDisplay`, VBO + GLSL).
 - **IMU window** (inivation cameras and AEDAT4 replays containing IMU samples) — acceleration/gyroscope/temperature readouts plus a live 3D view of the camera orientation (a cuboid you can see tilt and turn with the camera). Just open the window while the camera rests: orientation is ready immediately, the sensor fine-tunes itself over the first seconds, movements are followed in real time and a closed path returns to where it started. Yaw (rotation around the vertical axis) drifts slowly over minutes — a 6-axis IMU has no compass, every device behaves this way.
-- **APS window** (DAVIS cameras and AEDAT4 replays containing frames) — live grayscale preview with automatic exposure: point at something too dark or too bright and the exposure adjusts by itself.
+- **APS window** (DAVIS cameras and AEDAT4 replays containing frames) — live preview with automatic exposure (grayscale, or color on supported sensors): point at something too dark or too bright and the exposure adjusts by itself.
 - **Algorithm display windows** — `AlgoWindow` dockable windows showing algorithm title + output only (no parameters — those live in the sidebar).
 - **Layout persistence** — save/restore dock geometry and window positions to JSON (View → Save/Load Layout).
 

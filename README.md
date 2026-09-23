@@ -4,7 +4,7 @@
 
 A polished, open-source Qt 6 desktop app for event cameras — built on [openEB](https://github.com/prophesee-ai/openeb) v5.2.0.
 
-Real-time visualization · camera control · recording & playback · calibration · 24 algorithms · customizable themes
+Real-time visualization · camera control · recording & playback · calibration · 25 algorithms · customizable themes
 
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)
 ![Language](https://img.shields.io/badge/C%2B%2B17-Qt%206-orange)
@@ -19,9 +19,10 @@ Real-time visualization · camera control · recording & playback · calibration
 
 ## What's new in 3.0.0
 
-- **Inivation live cameras**: DAVIS240A/B/C, DAVIS346, DAVIS640, CDAVIS and DVXplorer connect directly — events, full bias control (Auto Bias included), hardware ROI on DAVIS, IMU stream with DV-style strip charts and a jAER-style pseudo-3D vector overlay, and APS frame preview
-- **AEDAT4 recording** for inivation cameras (DV-native format), plus AEDAT4/ALPDATA playback and offline tools
-- **Calibration** now scales its Auto Bias band and event buffering with the camera resolution
+- **Inivation live cameras**: DAVIS240A/B/C, DAVIS346, DAVIS640, CDAVIS and DVXplorer connect directly — events, full bias control (Auto Bias included), hardware ROI on DAVIS, IMU stream with a 3D attitude view, and APS frame preview (color on supported sensors)
+- **IMU attitude reworked**: instant alignment, rest re-centers the attitude, closed paths return; the IMU and APS views are now dockable side panels
+- **AEDAT4 recording** for inivation cameras (DV-native, interoperable) now carries optional IMU samples and APS frames, and replays surface them like a live camera; LZ4-compressed DV recordings open directly
+- **Calibration** scales its Auto Bias band and event buffering with the camera resolution; the square-size workflow no longer discards captures
 - Capability-aware UI: panels auto-hide when the connected camera lacks the hardware behind them
 
 ## What is this?
@@ -56,7 +57,7 @@ That's it. The launcher handles Wayland compatibility, HAL plugin paths, and Ope
 
 ### Live inivation DAVIS / DVXplorer cameras (optional, preliminary)
 
-**Preliminary support** for a subset of inivation cameras — DAVIS346/640 (full bias set) and DVXplorer (ON/OFF contrast thresholds) — events + biases only; APS frames, IMU and triggers are discarded. Many inivation-specific features are not yet supported — EB plus remains primarily designed and tested for **Prophesee** cameras. One-time setup — allow USB access for inivation devices:
+**Preliminary support** for the inivation DAVIS240A/B/C, DAVIS346, DAVIS640, CDAVIS and DVXplorer — live events, full bias control with Auto Bias, hardware ROI (DAVIS), an IMU attitude view and APS frame preview (color on supported sensors), plus DV-native AEDAT4 recording (events + IMU + APS). The 240/640/CDAVIS models follow the reference implementation but are not yet hardware-tested; EB plus remains primarily designed and tested for **Prophesee** cameras. One-time setup — allow USB access for inivation devices:
 
 ```bash
 sudo cp gui/davis/66-inivation.rules /etc/udev/rules.d/
@@ -96,7 +97,7 @@ All panels degrade gracefully when the device lacks the corresponding HAL facili
 4 stackable stages applied in a thread-safe pipeline: Polarity Filter, Polarity Invert, Flip X, Flip Y. Toggled from the sidebar.
 
 ### Algorithms (25 total)
-EB plus ships **20 self-developed algorithms** plus **4 OpenEB filter stages**, all registered in a single `AlgoBridge` registry.
+EB plus ships **21 self-developed algorithms** plus **4 OpenEB filter stages**, all registered in a single `AlgoBridge` registry.
 
 | Category | Examples |
 |----------|----------|
@@ -106,7 +107,7 @@ EB plus ships **20 self-developed algorithms** plus **4 OpenEB filter stages**, 
 | **Tracking** | Object Tracker (RCT, jAER-aligned), Hough Circle, Hough Line |
 | **Reconstruction** | Event-to-Video — **E2VID / E2VID+ / FireNet+ / HyperE2VID** (DL modes), BardowVariational, InteractingMaps |
 | **DL Optical Flow** | Dense Optical Flow (DL) — EVFlowNet, HSV-coded dense flow |
-| **Analytics** | Frequency Detector, Frequency Map, Auto Bias |
+| **Analytics** | Frequency Detector, Frequency Map |
 | **Visualization** | Time Surface, XYT 3D Point Cloud, Orientation Cluster |
 | **Calibration** | Intrinsic Calibration (blinking chessboard) |
 

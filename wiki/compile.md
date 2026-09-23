@@ -167,7 +167,7 @@ cmake --build build -- -j$(nproc)
 ./run.sh
 
 # 或直接运行（需自行设置环境变量）
-./build/gui_for_openeb
+./build/gui/gui_for_openeb
 ```
 
 `run.sh` 自动设置以下环境变量：
@@ -225,9 +225,9 @@ ctest -R "test_algo_bridge|test_config_manager|test_display_strategy|test_layout
 ctest -R "test_phase|test_raw" --output-on-failure
 ```
 
-**测试套件**：
-- `gui/tests/`：5 个可执行文件，40 个 TEST() 宏（algo_bridge/config_manager/display_strategy/layout_manager/theme_tokens）
-- `algo/tests/`：4 个可执行文件，288 个 TEST()/TEST_F() 宏（phase6_common/phase7_cv/phase8_10/raw_algos）
+**测试套件**（共注册 462 个用例;4 个环境门控用例在无真实录制/硬件时跳过）：
+- `gui/tests/`：15 个可执行文件（算法桥接/配置/回放/AEDAT4 读写/设备协议/面板/标定等）
+- `algo/tests/`：14 个可执行文件（各算法族套件 + raw 流集成测试）
 
 ### G6. GUI 构建注意事项
 

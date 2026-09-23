@@ -83,7 +83,7 @@ export QSG_RHI_BACKEND=opengl    # Qt 6 may default to Vulkan
 
 ## Live inivation DAVIS / DVXplorer Cameras (Optional, Preliminary)
 
-**Preliminary support**: EB plus can connect to inivation **DAVIS346/640** and **DVXplorer** cameras directly over USB — **events + biases only**. APS frames, IMU samples and trigger markers are parsed and discarded (the GUI is an events-only tool); the RAW recording, ROI and Trigger panels are not available, and other inivation-family features may still have compatibility gaps. **EB plus remains primarily designed and tested for Prophesee cameras.**
+**Preliminary support**: EB plus connects to inivation **DAVIS240A/B/C, DAVIS346, DAVIS640, CDAVIS and DVXplorer** cameras directly over USB — live events, full bias control with Auto Bias, hardware ROI (DAVIS), an IMU attitude window, APS frame preview and DV-native AEDAT4 recording (events + optional IMU / APS streams; see the feature matrix below). Other inivation-family features may still have compatibility gaps. **EB plus remains primarily designed and tested for Prophesee cameras.**
 
 Build requirement: `libusb-1.0` development files (the CMake build auto-detects them; without them the inivation device layer is compiled out and everything else works as before).
 
@@ -111,7 +111,7 @@ Then **unplug and replug the camera** (so the session permission tag applies), a
 | Recording | ✅ AEDAT4 (DV-native: events + IMU + APS frames) | ✅ AEDAT4 (same streams) | ✅ AEDAT4 (events + IMU) |
 | Trigger / ESP panels | auto-hidden (no facilities) | auto-hidden | auto-hidden |
 | IMU stream (checkbox + readout window) | ✅ live + AEDAT4 replay | ✅ live + AEDAT4 replay | ✅ live + AEDAT4 replay |
-| APS frames (checkbox + preview window, auto exposure) | ✅ (grayscale) live + AEDAT4 replay | ✅ (grayscale; 240 gain quirk handled) | ❌ (no APS hardware) |
+| APS frames (checkbox + preview window, auto exposure) | ✅ (grayscale; color on color-filter variants) live + AEDAT4 replay | ✅ (grayscale; CDAVIS = RGBW color; 240 gain quirk handled) | ❌ (no APS hardware) |
 | Firmware / logic at connect | FX3 fw 6 · FX2 fw 4 · logic 18 patch ≥ 1 | same as 346/640 | FX3 fw 9 · logic 18 patch ≥ 4 |
 
 ¹ DAVIS240A/B/C and CDAVIS follow the reference implementation (own register map, defaults and quirks) but have **not been tested on hardware** — expect a connect-time error for genuinely unsupported combinations.
@@ -192,6 +192,6 @@ cd build
 ctest --output-on-failure
 ```
 
-Test suites:
-- `gui/tests/`: 5 executables, 40 `TEST()` macros (algo_bridge, config_manager, display_strategy, layout_manager, theme_tokens)
-- `algo/tests/`: 4 executables, 288 `TEST()`/`TEST_F()` macros (phase6_common, phase7_cv, phase8_10, raw_algos)
+Test suites (462 registered cases in total; four env-gated tests skip without real recordings / hardware):
+- `gui/tests/`: 15 executables (algo bridge, config, playback, AEDAT4 writer/reader, device protocol, panels, calibration, …)
+- `algo/tests/`: 14 executables (per-family algorithm suites + raw-stream integration)

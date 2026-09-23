@@ -9,11 +9,21 @@
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)
 ![Language](https://img.shields.io/badge/C%2B%2B17-Qt%206-orange)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)
-![Version](https://img.shields.io/badge/version-2.9.3-blue)
+![Version](https://img.shields.io/badge/version-3.0.0-blue)
 
 ![主界面](pic/1.9.0.png)
 
 </div>
+
+---
+
+## 3.0.0 新特性
+
+- **Inivation 实时相机**：DAVIS240A/B/C、DAVIS346、DAVIS640、CDAVIS 与 DVXplorer 直连——事件流、完整偏置控制（含 Auto Bias）、DAVIS 硬件 ROI、IMU 三维姿态视图，以及 APS 帧预览（支持的传感器上为彩色）
+- **IMU 姿态链重构**：打开即对齐、静止自动回正、闭环路径可回位；IMU 与 APS 视图改为可停靠侧栏
+- **AEDAT4 录制**（inivation 相机，DV 原生且可互操作）可选携带 IMU 样本与 APS 帧，回放时如实机一般呈现；DV 的 LZ4 压缩录制可直接打开
+- **标定**的 Auto Bias 区间与事件缓冲随相机分辨率自适应；square size 工作流不再丢弃抓拍
+- **能力感知 UI**：相机缺少对应硬件时面板自动隐藏
 
 ---
 
@@ -51,7 +61,7 @@ cmake --build build -- -j$(nproc)
 
 ### 连接 inivation DAVIS / DVXplorer 相机（可选，初步支持）
 
-**初步支持**部分 inivation 相机——DAVIS346/640（完整偏置集）与 DVXplorer（ON/OFF 对比度阈值），仅事件流 + 偏置；APS 帧、IMU、触发被丢弃。许多 inivation 相机功能尚未支持——本 GUI 仍以 **Prophesee** 相机为主要适配与测试对象。一次性安装 USB 访问规则：
+**初步支持** inivation DAVIS240A/B/C、DAVIS346、DAVIS640、CDAVIS 与 DVXplorer——实时事件流、完整偏置控制（含 Auto Bias）、DAVIS 硬件 ROI、IMU 姿态视图与 APS 帧预览（支持的传感器上为彩色），以及 DV 原生 AEDAT4 录制（事件 + IMU + APS）。240/640/CDAVIS 型号遵循参考实现但尚未经过真机测试；本 GUI 仍以 **Prophesee** 相机为主要适配与测试对象。一次性安装 USB 访问规则：
 
 ```bash
 sudo cp gui/davis/66-inivation.rules /etc/udev/rules.d/
@@ -79,7 +89,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 所有面板在设备不支持对应 HAL facility 时优雅降级（如文件回放时四个硬件面板自动禁用）。
 
 ### 录制与回放
-- RAW 录制 —— 实时相机流录制，带实时缓冲刷新（DAVIS/DVXplorer：仅实时预览与偏置）
+- RAW 录制 —— 实时相机流录制，带实时缓冲刷新（inivation 相机：DV 原生 AEDAT4，可选携带 IMU / APS 流）
 - 文件回放 —— 速度控制、跳转、暂停/恢复、位置追踪
 - 文件裁剪 —— 从事件文件中提取时间段
 
@@ -90,8 +100,8 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ### 事件预处理滤波链
 4 级可叠加阶段，线程安全管线：Polarity Filter、Polarity Invert、Flip X、Flip Y。从侧栏切换。
 
-### 算法（共 24 项）
-EB plus 内置 **20 个自研算法** + **4 项 openEB 滤波阶段**，全部注册在统一的 `AlgoBridge` 注册表中。
+### 算法（共 25 项）
+EB plus 内置 **21 个自研算法** + **4 项 openEB 滤波阶段**，全部注册在统一的 `AlgoBridge` 注册表中。
 
 | 类别 | 示例 |
 |------|------|
@@ -101,7 +111,7 @@ EB plus 内置 **20 个自研算法** + **4 项 openEB 滤波阶段**，全部�
 | **跟踪** | Object Tracker（RCT，对齐 jAER）、Hough Circle、Hough Line |
 | **重建** | Event-to-Video —— **E2VID / E2VID+ / FireNet+ / HyperE2VID**（DL 模式）、BardowVariational、InteractingMaps |
 | **DL 光流** | Dense Optical Flow (DL) —— EVFlowNet，HSV 编码稠密光流 |
-| **分析** | Frequency Detector、Frequency Map、Auto Bias |
+| **分析** | Frequency Detector、Frequency Map |
 | **可视化** | Time Surface、XYT 3D 点云、Orientation Cluster |
 | **标定** | Intrinsic Calibration（闪烁棋盘格）|
 
@@ -269,6 +279,13 @@ EB plus 正在持续开发中，可能仍存在 BUG。如果你在使用过程�
 
 - **项目原创代码**：[MIT](LICENSE)
 - **openEB SDK**：[Apache 2.0](openeb/licensing/LICENSE_OPEN) —— 版权归 Prophesee 所有
+- **Inivation 实时相机支持**（`gui/davis/`）：协议、寄存器表与默认值移植自
+  [dv-processing](https://gitlab.com/inivation/dv/dv-processing)
+  （[Apache 2.0](https://gitlab.com/inivation/dv/dv-processing/-/blob/master/LICENSE)，© iniVation AG）——各文件内含出处声明
+- **对齐 jAER 的算法**：参考行为来自
+  [jAER](https://github.com/jaer-project/jaer3)（[LGPL-2.1](ref/jaer/COPYING)）——全部为重新实现,未内置任何源码
+- **DV GUI**：未使用。iniVation 的 dv-gui 使用自定义（非标准）许可证;
+  IMU 可视化为全新实现,仅共享通用的滚动曲线概念
 
 ---
 
