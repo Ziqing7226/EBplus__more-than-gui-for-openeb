@@ -39,8 +39,14 @@ public:
           output_fps_(clamp_fps(output_fps)) {}
 
     /// @brief Accumulates events; consumed at the next due get_frame().
+    /// With no model loaded the events are dropped right here: get_frame()
+    /// early-returns without reaching the buffer clear, so buffering them
+    /// anyway would grow the buffer without bound (the default model path
+    /// is repo-relative and a launch from another working directory loads
+    /// nothing).
     void process(const Event* events, std::size_t n) {
         if (events == nullptr || n == 0) return;
+        if (!inference_.is_model_loaded()) return;
         event_buffer_.insert(event_buffer_.end(), events, events + n);
     }
 
