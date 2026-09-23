@@ -205,6 +205,13 @@ private:
     /// E2VID forces the 1/4 downsample ON while enabled; this prior state
     /// is restored on disable.
     std::optional<bool> e2v_downsample_save_;
+    /// Shared tail of "algorithm disabled": restores the unified-ROI and
+    /// E2VID downsample automation state saved at enable time. Runs on BOTH
+    /// disable paths — the sidebar checkbox (algorithm_toggled handler) and
+    /// the AlgoWindow's own close (whose closing handler only disables the
+    /// instance and unchecks the sidebar with signals blocked, so no
+    /// toggled signal fires there).
+    void restore_algo_automation(const std::string& key);
     SettingsPanel* settings_{nullptr};
     QDockWidget* settings_dock_{nullptr};  ///< Right-dock wrapper, for hide/show.
     PlaybackControls* playback_controls_{nullptr};

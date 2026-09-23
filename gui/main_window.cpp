@@ -1321,32 +1321,7 @@ void MainWindow::wire_signals() {
                         auto it = algo_windows_.find(key);
                         if (it != algo_windows_.end() && it.value()) it.value()->close();
                         if (key == "xyt_visualizer" && xyt_display_) xyt_display_->close();
-                        // Phase 2.6 debug D-7: restore the ROI state saved
-                        // when the algorithm was enabled (only if the
-                        // automation actually applied one). An empty saved
-                        // rect (never configured) restores as the default
-                        // 256×144 rect in the disabled state.
-                        if (AlgorithmsPanel::algo_defaults_to_roi(key) &&
-                            roi_automation_save_.has_value()) {
-                            const auto s = *roi_automation_save_;
-                            const int w = s.x1 - s.x0;
-                            const int h = s.y1 - s.y0;
-                            if (w > 0 && h > 0) {
-                                camera_.set_unified_roi(s.enabled, s.x0, s.y0,
-                                                        w, h, s.roni);
-                            } else {
-                                camera_.set_unified_roi(s.enabled, -1, -1,
-                                                        256, 144, s.roni);
-                            }
-                            roi_automation_save_.reset();
-                        }
-                        // Phase 3: restore the downsample state saved when
-                        // E2VID was enabled.
-                        if (key == "event_to_video" &&
-                            e2v_downsample_save_.has_value()) {
-                            ap->set_preproc_downsample(*e2v_downsample_save_);
-                            e2v_downsample_save_.reset();
-                        }
+                        restore_algo_automation(key);
                     }
                 });
         // When an algorithm is enabled from the sidebar, open its AlgoWindow
@@ -1357,6 +1332,31 @@ void MainWindow::wire_signals() {
                 [this](const std::string& name) {
                     on_open_algo_window(name);
                 });
+    }
+}
+
+void MainWindow::restore_algo_automation(const std::string& key) {
+    // Phase 2.6 debug D-7: restore the ROI state saved when the algorithm
+    // was enabled (only if the automation actually applied one). An empty
+    // saved rect (never configured) restores as the default 256×144 rect in
+    // the disabled state.
+    if (AlgorithmsPanel::algo_defaults_to_roi(key) &&
+        roi_automation_save_.has_value()) {
+        const auto s = *roi_automation_save_;
+        const int w = s.x1 - s.x0;
+        const int h = s.y1 - s.y0;
+        if (w > 0 && h > 0) {
+            camera_.set_unified_roi(s.enabled, s.x0, s.y0, w, h, s.roni);
+        } else {
+            camera_.set_unified_roi(s.enabled, -1, -1, 256, 144, s.roni);
+        }
+        roi_automation_save_.reset();
+    }
+    // Phase 3: restore the downsample state saved when E2VID was enabled.
+    if (auto* ap = settings_->algorithms_panel();
+        ap && key == "event_to_video" && e2v_downsample_save_.has_value()) {
+        ap->set_preproc_downsample(*e2v_downsample_save_);
+        e2v_downsample_save_.reset();
     }
 }
 
@@ -2294,6 +2294,12 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
         if (auto* ap = settings_->algorithms_panel()) {
             ap->set_algo_enabled(algo_name, false);
         }
+        // The checkbox path reaches the ROI/downsample restore through the
+        // algorithm_toggled handler; this close path never emits that signal
+        // (the sidebar uncheck above is signal-blocked), so run the shared
+        // restore here — otherwise the unified ROI / E2VID downsample forced
+        // at enable time silently outlive the algorithm.
+        restore_algo_automation(algo_name);
         // xyt_visualizer: also close the SpaceTimeDisplay.
         if (algo_name == "xyt_visualizer" && xyt_display_) xyt_display_->close();
     });
