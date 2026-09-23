@@ -107,7 +107,10 @@ private:
     // wrote to the hardware. ~300 ms after the last change the pending bias
     // is applied once — no USB-write flooding during continuous adjustments.
     QTimer apply_debounce_;
-    std::string pending_apply_;
+    /// Rows edited via wheel/keyboard since the last debounce fire. A
+    /// single-slot pending name silently dropped every earlier row when the
+    /// user swept several biases within one 300 ms window.
+    std::vector<std::string> pending_applies_;
 };
 
 } // namespace gui

@@ -26,6 +26,9 @@ class FileToolsPanel : public AbstractPanel {
     Q_OBJECT
 public:
     explicit FileToolsPanel(FileConverter* converter, QWidget* parent = nullptr);
+    /// Joins the file-info query worker (deletes the dialog) — must run
+    /// while the shared FileConverter is still alive.
+    void shutdown_info_dialog();
 
     QString panel_id() const override { return QStringLiteral("file_tools"); }
     QString panel_title() const override { return tr("File Tools"); }

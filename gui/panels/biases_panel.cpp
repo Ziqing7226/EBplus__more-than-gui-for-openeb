@@ -2,6 +2,8 @@
 
 #include "biases_panel.h"
 
+#include <algorithm>
+
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QGroupBox>
@@ -55,12 +57,18 @@ BiasesPanel::BiasesPanel(QWidget* parent) : AbstractPanel(parent) {
     apply_debounce_.setSingleShot(true);
     apply_debounce_.setInterval(300);
     connect(&apply_debounce_, &QTimer::timeout, this, [this]() {
-        for (auto& r : rows_) {
-            if (r.name == pending_apply_) {
-                apply_value(r, r.slider->value());
-                break;
+        // Apply every row edited in the window (in insertion order), then
+        // clear — sweeping several biases with the wheel must reach the
+        // hardware for each of them, not only the last.
+        for (const auto& name : pending_applies_) {
+            for (auto& r : rows_) {
+                if (r.name == name) {
+                    apply_value(r, r.slider->value());
+                    break;
+                }
             }
         }
+        pending_applies_.clear();
     });
 
     build_auto_bias_section(outer);
@@ -371,7 +379,11 @@ void BiasesPanel::populate() {
                     // are applied on sliderReleased; wheel/keyboard edits
                     // (which never emit sliderReleased) go through a 300 ms
                     // debounce so they still reach the hardware (§六-U1).
-                    pending_apply_ = bias_name;
+                    if (std::find(pending_applies_.begin(),
+                                  pending_applies_.end(),
+                                  bias_name) == pending_applies_.end()) {
+                        pending_applies_.push_back(bias_name);
+                    }
                     apply_debounce_.start();
                 });
         connect(row.slider, &QSlider::sliderReleased, this,

@@ -156,4 +156,12 @@ void FileToolsPanel::on_failed(const QString& msg) {
     set_buttons_enabled(true);
 }
 
+void FileToolsPanel::shutdown_info_dialog() {
+    // ~FileInfoDialog joins the query worker; called from MainWindow's
+    // close event while converter_ (MainWindow's file_converter_ member)
+    // is still alive.
+    delete info_dialog_;
+    info_dialog_ = nullptr;
+}
+
 } // namespace gui

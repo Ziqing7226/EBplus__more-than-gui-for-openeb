@@ -301,6 +301,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     // Without this, ~QObject child cleanup runs after member destructors,
     // causing use-after-free in widget destructors.
     if (export_dialog_) { delete export_dialog_; export_dialog_ = nullptr; }
+    // Same class of hazard: the info dialog's worker thread calls into
+    // file_converter_ — join it (via the dialog dtor) while the member is
+    // still alive.
+    if (settings_ && settings_->file_tools_panel()) {
+        settings_->file_tools_panel()->shutdown_info_dialog();
+    }
     event->accept();
 }
 

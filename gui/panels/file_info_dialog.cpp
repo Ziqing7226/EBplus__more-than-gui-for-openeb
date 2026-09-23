@@ -100,7 +100,8 @@ void FileInfoDialog::start_query(const QString& path) {
     // query returns, the result is discarded safely.
     QPointer<FileInfoDialog> self(this);
     FileConverter* conv = converter_;
-    std::thread([self, conv, path]() {
+    if (worker_.joinable()) worker_.join();
+    worker_ = std::thread([self, conv, path]() {
         FileInfo fi;
         QString err;
         try {
@@ -125,7 +126,14 @@ void FileInfoDialog::start_query(const QString& path) {
                 self->lbl_status_->setText(tr("Failed to read file info: %1").arg(err));
             }
         }, Qt::QueuedConnection);
-    }).detach();
+    });
+}
+
+FileInfoDialog::~FileInfoDialog() {
+    // Must not outlive the converter: MainWindow::closeEvent deletes this
+    // dialog (before the converter member dies) and the join blocks until
+    // the in-flight query returns.
+    if (worker_.joinable()) worker_.join();
 }
 
 } // namespace gui

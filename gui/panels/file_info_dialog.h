@@ -12,6 +12,8 @@
 #include <QDialog>
 #include <QPointer>
 
+#include <thread>
+
 #include <metavision/sdk/base/utils/timestamp.h>
 
 class QLabel;
@@ -27,6 +29,7 @@ class FileInfoDialog : public QDialog {
     Q_OBJECT
 public:
     FileInfoDialog(FileConverter* converter, QWidget* parent = nullptr);
+    ~FileInfoDialog() override;
 
     /// @brief Pre-fills the source path and starts the async query.
     void set_source(const QString& path);
@@ -41,6 +44,12 @@ private:
 
     FileConverter* converter_;
     bool querying_{false};
+    /// Joinable handle for the info-query worker. The thread dereferences
+    /// the MainWindow-owned FileConverter, which dies before this dialog
+    /// (a deep Qt child) is destroyed — the join in our destructor (invoked
+    /// from MainWindow::closeEvent via the panel) is what keeps the query
+    /// from outliving the converter.
+    std::thread worker_;
 
     QLineEdit* edt_source_{nullptr};
     QPushButton* btn_browse_{nullptr};
