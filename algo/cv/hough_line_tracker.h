@@ -68,6 +68,7 @@ public:
               std::min(90.0, std::max(5.0, favor_vertical_range_deg))) {
         if (num_theta_bins_ < 1) num_theta_bins_ = 1;
         rebuild(num_rho_bins);
+        apply_output_tau();
     }
 
     /// @brief Processes an event packet; returns the single smoothed line
@@ -124,7 +125,10 @@ public:
         hough_decay_factor_ = v < 0.0F ? 0.0F : (v > 1.0F ? 1.0F : v);
     }
     double output_tau_ms() const { return output_tau_s_ * 1e3; }
-    void set_output_tau_ms(double v) { output_tau_s_ = std::max(0.001, v) * 1e-3; }
+    void set_output_tau_ms(double v) {
+        output_tau_s_ = std::max(0.001, v) * 1e-3;
+        apply_output_tau();
+    }
     double favor_vertical_range_deg() const { return favor_vertical_range_deg_; }
     void set_favor_vertical_range_deg(double v) {
         favor_vertical_range_deg_ = std::min(90.0, std::max(5.0, v));
@@ -305,6 +309,15 @@ private:
     Metavision::timestamp last_filter_t_{-1};
     LowPassFilter rho_lp_;   // jAER rhoFilter
     AngularLowpass theta_lp_;  // jAER AngularLowpassFilter(180)
+
+    /// jAER HoughLineTracker.setTauMs sends tau to BOTH output filters
+    /// (rhoFilter.setTauMs + thetaFilter.setTauMs). The port used to store
+    /// output_tau_s_ without ever forwarding it, leaving the GUI knob dead
+    /// (rho ran at the 10 Hz ctor default, theta at a hardcoded 10 ms).
+    void apply_output_tau() {
+        rho_lp_.set_cutoff_hz(1.0 / (2.0 * M_PI * output_tau_s_));
+        theta_lp_.set_tau_s(output_tau_s_);
+    }
 };
 
 } // namespace gui_algo
