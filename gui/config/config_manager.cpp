@@ -200,11 +200,21 @@ bool ConfigManager::apply_biases(CameraController* c, const QJsonObject& o, QStr
             v = val_obj.toInt();
             converted = true;
         }
-        if (!converted) { ok = false; continue; }
+        if (!converted) {
+            ok = false;
+            err += tr("%1: unparsable value; ").arg(QString::fromStdString(name));
+            continue;
+        }
         try {
-            b->set(name, v);
+            // I_LL_Biases::set returns false when the hardware rejects the
+            // write -- treat that as a failure, not success.
+            if (!b->set(name, v)) {
+                ok = false;
+                err += tr("%1: rejected by hardware; ").arg(QString::fromStdString(name));
+            }
         } catch (...) {
             ok = false;
+            err += tr("%1: write threw; ").arg(QString::fromStdString(name));
         }
     }
     return ok;
