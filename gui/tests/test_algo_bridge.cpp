@@ -18,6 +18,7 @@
 
 #include <metavision/sdk/base/events/event_cd.h>
 
+#include "algo_bridge/algo_backend.h"
 #include "algo_bridge/algo_bridge.h"
 
 using gui::AlgoBridge;
@@ -416,4 +417,35 @@ TEST(AlgoBridgeFloodGuard, ModerateRateDoesNotOverload) {
     // Batches are never truncated: nothing was dropped.
     EXPECT_EQ(inst->total_pushed(), 60000u);
     EXPECT_EQ(inst->total_dropped(), 0u);
+}
+
+TEST(AlgoBridgeBackends, OpticalFlowPpsScaleKeysMapToDistinctSlots) {
+    // Backend-level check (instance-level get_param reads the param cache,
+    // which masked this): the ctor replays every registered default through
+    // set_param while mode is still 0, so a backend that slots pps_scale_*
+    // by the CURRENT mode ends up with the last default (co/tm) in slot 0
+    // and the GUI-vs-backend values diverge. Slots must follow the key.
+    const auto backend = gui::create_algo_backend("sparse_optical_flow", 64, 64);
+    ASSERT_NE(backend, nullptr);
+    backend->set_param("pps_scale_lp", "0.003");
+    backend->set_param("pps_scale_lk", "0.7");
+    backend->set_param("pps_scale_bm", "0.09");
+    backend->set_param("pps_scale_co", "0.05");
+    const auto expect_val = [](gui::AlgoBackend& b, const char* key, double want) {
+        EXPECT_NEAR(std::stod(b.get_param(key)), want, 1e-9) << key;
+    };
+    backend->set_param("mode", "1");  // switch away from LocalPlanes
+    expect_val(*backend, "pps_scale_lp", 0.003);
+    expect_val(*backend, "pps_scale_lk", 0.7);
+    backend->set_param("mode", "0");
+    expect_val(*backend, "pps_scale_lp", 0.003);
+
+    const auto dense = gui::create_algo_backend("dense_optical_flow", 64, 64);
+    ASSERT_NE(dense, nullptr);
+    dense->set_param("pps_scale_pf", "0.002");
+    dense->set_param("pps_scale_tg", "0.007");
+    dense->set_param("pps_scale_tm", "0.009");
+    dense->set_param("mode", "2");
+    expect_val(*dense, "pps_scale_pf", 0.002);
+    expect_val(*dense, "pps_scale_tm", 0.009);
 }

@@ -443,7 +443,12 @@ public:
         else if (k == "cluster_ema_alpha") algo_.set_cluster_ema_alpha(static_cast<float>(to_d(v)));
         else if (k == "pps_scale_lp" || k == "pps_scale_lk" ||
                  k == "pps_scale_bm" || k == "pps_scale_co") {
-            pps_scale_[static_cast<int>(algo_.mode())] = to_d(v);
+            // Slot follows the PARAM KEY, not the current mode — the
+            // instance ctor replays all defaults before any mode switch, so
+            // keying by mode() made the four writes clobber one slot.
+            pps_scale_[k == "pps_scale_lp" ? 0
+                     : k == "pps_scale_lk" ? 1
+                     : k == "pps_scale_bm" ? 2 : 3] = to_d(v);
         }
         else if (k == "arrow_grid_px") arrow_grid_px_ = to_i(v);
         else if (k == "lk_thr") algo_.set_lk_thr(to_d(v));
@@ -462,7 +467,9 @@ public:
         if (k == "cluster_ema_alpha") return from_d(algo_.cluster_ema_alpha());
         if (k == "pps_scale_lp" || k == "pps_scale_lk" ||
             k == "pps_scale_bm" || k == "pps_scale_co") {
-            return from_d(pps_scale_[static_cast<int>(algo_.mode())]);
+            return from_d(pps_scale_[k == "pps_scale_lp" ? 0
+                                   : k == "pps_scale_lk" ? 1
+                                   : k == "pps_scale_bm" ? 2 : 3]);
         }
         if (k == "arrow_grid_px") return from_i(arrow_grid_px_);
         if (k == "lk_thr") return from_d(algo_.lk_thr());
@@ -587,7 +594,11 @@ public:
         else if (k == "max_velocity_px_s") algo_.set_max_velocity_px_s(static_cast<float>(to_d(v)));
         else if (k == "pps_scale_pf" || k == "pps_scale_tg" ||
                  k == "pps_scale_tm") {
-            pps_scale_[static_cast<int>(algo_.mode())] = to_d(v);
+            // Slot follows the PARAM KEY, not the current mode — the
+            // instance ctor replays all defaults before any mode switch, so
+            // keying by mode() made the three writes clobber one slot.
+            pps_scale_[k == "pps_scale_pf" ? 0
+                     : k == "pps_scale_tg" ? 1 : 2] = to_d(v);
         }
         else if (k == "arrow_grid_px") arrow_grid_px_ = to_i(v);
     }
@@ -599,7 +610,8 @@ public:
         if (k == "max_velocity_px_s") return from_d(algo_.max_velocity_px_s());
         if (k == "pps_scale_pf" || k == "pps_scale_tg" ||
             k == "pps_scale_tm") {
-            return from_d(pps_scale_[static_cast<int>(algo_.mode())]);
+            return from_d(pps_scale_[k == "pps_scale_pf" ? 0
+                                   : k == "pps_scale_tg" ? 1 : 2]);
         }
         if (k == "arrow_grid_px") return from_i(arrow_grid_px_);
         return {};
