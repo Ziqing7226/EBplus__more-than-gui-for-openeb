@@ -2187,15 +2187,18 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
         it.value()->show();
         it.value()->raise();
         it.value()->activateWindow();
-        // The Self-Test has no sidebar checkbox, so when the flood guard
-        // auto-disables its instance (>100 Mev/s for 4 consecutive 1 s
-        // windows — shaking the camera, which is the test's own
-        // instruction, can sustain that) NOTHING ever revives it:
-        // push_events then drops every batch, the heatmap freezes on the
-        // connect-time reset's all-red "never seen" frame, and no
-        // reconnect helps. Clicking the button means "run the test" —
-        // revive + fresh measurement (set_enabled clears the overload
-        // state; the guard leaves the working case untouched).
+        // The Self-Test has no sidebar checkbox, so a silently-disabled
+        // instance is never revived: the flood guard (>100 Mev/s for 4
+        // consecutive 1 s windows — shaking the camera, the test's own
+        // instruction, can sustain that) sets overloaded_+enabled_=false,
+        // and loading a camera config runs the algorithm mutex over the
+        // live instances with set_enabled(false) and NO signal/window
+        // close (config_manager's apply_algo_state). push_events then
+        // drops every batch, the heatmap freezes on the connect-time
+        // reset's all-red "never seen" frame, and no reconnect helps.
+        // Clicking the button means "run the test" — revive + fresh
+        // measurement (set_enabled clears the overload state; the guard
+        // leaves the working case untouched).
         if (algo_name == "sensor_self_test") {
             if (auto inst = it.value()->instance(); inst && !inst->is_enabled()) {
                 inst->set_enabled(true);

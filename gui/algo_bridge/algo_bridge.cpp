@@ -1,8 +1,8 @@
 // gui/algo_bridge/algo_bridge.cpp
 //
 // AlgoInstance 持有真实的 AlgoBackend 实例，真正调用 algo/cv 与 algo/analytics
-// 的算法类。注册表列出 28 个自研模块 + 8 个 OpenEB 事件变换阶段（实际处理
-// 在 FilterChain，此处仅作注册占位）= 36 项。
+// 的算法类。注册表列出 21 个自研算法 + 4 个 OpenEB 滤波阶段（2026-08-22
+// 裁剪后的真值，test_algo_bridge 钉住 25）。
 
 #include "algo_bridge.h"
 

@@ -505,6 +505,14 @@ void FileConverter::run_convert_external(const QString& src, const QString& dst,
     }
     if (csvs) csvs->flush();
     if (csvf) csvf->close();
+    // QTextStream never throws -- surface disk-full / IO errors through
+    // status() the same way the SDK conversion path does (57b406b parity).
+    if (csvs && csvs->status() != QTextStream::Ok) {
+        std::lock_guard<std::mutex> lk(cb_mtx);
+        cb_error = tr("Write error while writing CSV output "
+                      "(disk full or IO error?).").toStdString();
+        cb_error_flag.store(true, std::memory_order_release);
+    }
 
     if (cb_error_flag.load(std::memory_order_acquire)) {
         std::string msg;
@@ -581,11 +589,13 @@ void FileConverter::run_cut_external(const QString& src, const QString& dst,
                 if (end_us > 0 && it_begin != e && (e - 1)->t > end_us) {
                     auto it = it_begin;
                     while (it != e && it->t <= end_us) ++it;
-                    writer.add_events(it_begin, it);
+                    if (!writer.add_events(it_begin, it)) {
+                        cb_error_flag.store(true, std::memory_order_release);
+                    }
                     reached_end.store(true, std::memory_order_release);
                     source->request_stop(); // last wanted event reached
-                } else {
-                    writer.add_events(it_begin, e);
+                } else if (!writer.add_events(it_begin, e)) {
+                    cb_error_flag.store(true, std::memory_order_release);
                 }
                 if (span_us > 0) {
                     double r = static_cast<double>((e - 1)->t - start_us) /

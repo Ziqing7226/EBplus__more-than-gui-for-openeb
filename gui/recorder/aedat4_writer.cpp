@@ -117,13 +117,9 @@ void build_imu_packet(const std::vector<davis::ImuSample>& samples,
     }
 }
 
-/// Frame — dv data/frame.fbs: file_identifier "FRME"; root table Frame.
-/// Written fields: VT4 timestamp, VT5 tsSOF, VT6 tsEOF, VT9 format (i8,
-/// OPENCV_8U_C1 = 0), VT10 sizeX, VT11 sizeY, VT14 pixels vector, VT16
-/// source (i8, SENSOR = 1); SOE/EOE/position/exposure keep defaults
-/// (omitted → vtable entry 0). Table (44 B): [soffset][ts @4][sof @12]
-/// [eof @20][pixdisp @28][format @32][sizeX @34][sizeY @36][posX @38]
-/// [posY @40][source @42]; vtable@52 (30 B); pixels vector@84.
+/// Frame — dv data/frame.fbs: file_identifier "FRME"; root table Frame
+/// (see the layout comment inside build_frame_packet below — the earlier
+/// header here described a pre-color-support layout and was wrong).
 void build_frame_packet(const davis::ApsFrame& f, std::vector<std::uint8_t>& out) {
     // dv data/frame.fbs: file_identifier "FRME"; root table Frame. Fields in
     // declaration order (VT = 4 + 2*index): ts VT4, tsSOF VT6, tsEOF VT8,

@@ -147,7 +147,8 @@ public:
         std::fill(counts_.begin(), counts_.end(), 0);
         std::fill(last_ts_.begin(), last_ts_.end(), kSentinel);
         std::fill(isi_.begin(), isi_.end(), kDefaultIsi);
-        avg_isi_ = 0.0F;
+        avg_isi_ = 1e7F;  // jAER resetFilter re-fills avgIsi with DEFAULT_ISI;
+                      // a 0 reset would re-open the all-pass warm-up window
         std::fill(hot_mask_.begin(), hot_mask_.end(), 0);
         total_events_ = 0;
         last_learn_t_ = 0;

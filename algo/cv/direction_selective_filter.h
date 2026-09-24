@@ -88,15 +88,6 @@ public:
                 update_motion(e, r);
             }
         }
-        // Decay toward zero every batch: the overlay is meant to show
-        // RECENT direction distribution ("over the current batch" per the
-        // accessor comment), but the counters only ever grew -- the text
-        // climbed without bound (signed overflow on long sessions) and the
-        // dominant direction locked in early. Same per-batch decay the
-        // orientation filter's histogram uses.
-        if (enable_global_mode_) {
-            for (auto& cnt_bin : global_hist_) cnt_bin = (cnt_bin * 9) / 10;
-        }
         return dir;
     }
 
@@ -128,11 +119,23 @@ public:
     }
 
     /// @brief Classifies a batch (raw fallback); fills @p out (resized to count).
+    /// Per-batch 10% decay toward zero: the overlay is meant to show the
+    /// RECENT direction distribution ("over the current batch" per the
+    /// accessor comment), but the counters only ever grew -- the text
+    /// climbed without bound (signed overflow on long sessions) and the
+    /// dominant direction locked in early. Runs at BOTH process() exits so
+    /// the raw and orientation-aware paths decay identically.
+    void decay_histogram_batch() {
+        if (enable_global_mode_) {
+            for (auto& cnt_bin : global_hist_) cnt_bin = (cnt_bin * 9) / 10;
+        }
+    }
     void process(const Event* events, std::size_t count, std::vector<int>& out) {
         out.resize(count);
         for (std::size_t i = 0; i < count; ++i) {
             out[i] = classify(events[i]);
         }
+        decay_histogram_batch();
     }
 
     /// @brief Classifies a batch with per-event orientations (orientation-aware).
@@ -143,6 +146,7 @@ public:
         for (std::size_t i = 0; i < count; ++i) {
             out[i] = classify(events[i], oris[i]);
         }
+        decay_histogram_batch();
     }
 
     /// @brief Processes an event packet (raw fallback; updates state + histogram).

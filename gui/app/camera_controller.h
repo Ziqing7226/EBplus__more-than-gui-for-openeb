@@ -422,7 +422,7 @@ private:
     /// never "arrives" again, so the live-sized ring would silently keep
     /// only the last ~10 s — long recordings played back with the IMU
     /// window open showed nothing until the final seconds. File sources get
-    /// a much larger cap instead (≈40 min at 800 Hz; ~80 MB worst case).
+    /// a much larger cap instead (≈40 min at 800 Hz; ~96 MB worst case).
     static constexpr std::size_t kImuRingMaxFile = 2'000'000;
 
     /// APS frame stream state (DAVIS only; same session-scoped pattern).

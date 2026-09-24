@@ -1447,9 +1447,12 @@ void CameraController::teardown() {
         imu_ring_.clear();
     }
 #endif
-    raw_tap_ = nullptr;
-    imu_tap_ = nullptr;
-    aps_tap_ = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(tap_mutex_);
+        raw_tap_ = nullptr;
+        imu_tap_ = nullptr;
+        aps_tap_ = nullptr;
+    }
     file_playback_pos_.store(-1, std::memory_order_relaxed);
     imu_discovered_.store(false);
     aps_discovered_.store(false);

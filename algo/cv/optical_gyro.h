@@ -11,6 +11,7 @@
 #define GUI_ALGO_CV_OPTICAL_GYRO_H
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -183,10 +184,13 @@ private:
             // int conversion overflows (UB on x86: INT_MIN), throwing the
             // whole stabilized frame onto one border.
             if (e.t > c.last_t) {
+                // jAER updateMass: decay the stored mass across the gap,
+                // then add 1. Simultaneous events (dt == 0) leave the mass
+                // untouched, matching jAER and the ObjectTracker guard.
                 c.mass *= std::exp(-static_cast<float>(e.t - c.last_t) /
                                    static_cast<float>(mass_decay_tau_us_));
+                c.mass += 1.0F;
             }
-            c.mass += 1.0F;
             c.last_t = e.t;
         }
     }
@@ -277,9 +281,13 @@ private:
         // age); velocityPPt = weighted mean velocity.
         // Saturate instead of trusting upstream boundedness: the age feeds
         // a position offset, so a runaway value would shove every event off
-        // frame (clamped to the border) rather than crash.
-        average_cluster_age_ = std::clamp(
-            age_sum / static_cast<double>(weight_sum), 0.0, 3.6e12);  // ≤ 1 h
+        // frame (clamped to the border) rather than crash. The ceiling is
+        // INT_MAX -- average_cluster_age_ is an int, and anything larger
+        // would itself be a double->int overflow (the very UB this guard
+        // exists to prevent).
+        average_cluster_age_ = static_cast<int>(std::clamp(
+            age_sum / static_cast<double>(weight_sum), 0.0,
+            static_cast<double>(std::numeric_limits<int>::max())));
         vel_pp_x_ = avgxv / weight_sum;
         vel_pp_y_ = avgyv / weight_sum;
         float inst_tx = -avgxloc;

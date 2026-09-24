@@ -1623,8 +1623,9 @@ TEST(ImuPoseFilter, SlowPanDoesNotCorruptTheBias) {
         pose.update(make_imu(1000LL * i, -0.93F, 0.20F, -0.09F, bx, by, bz));
     }
     ASSERT_TRUE(pose.aligned());
-    const double frozen_x = pose.bias_x_dps(), frozen_y = pose.bias_y_dps(),
-                 frozen_z = pose.bias_z_dps();
+    // bias_y is about to be exercised (the pan absorbs into it); x/z are
+    // the frozen witnesses.
+    const double frozen_x = pose.bias_x_dps(), frozen_z = pose.bias_z_dps();
 
     struct Q { double w, x, y, z; };
     const auto qmul = [](Q a, Q b) {

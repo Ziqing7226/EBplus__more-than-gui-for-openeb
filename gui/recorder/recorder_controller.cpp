@@ -121,6 +121,8 @@ bool RecorderController::start(CameraController* controller, const QString& path
         emit error(QString::fromUtf8(e.what()));
         return false;
     }
+    written_events_ = 0;  // otherwise the stop message shows the previous
+                          // recording's count (the AEDAT4/processed paths reset)
     controller_ = controller;
     path_ = path;
     recording_ = true;
