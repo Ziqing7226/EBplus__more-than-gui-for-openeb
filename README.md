@@ -53,7 +53,7 @@ cmake --build build -- -j$(nproc)
 
 That's it. The launcher handles Wayland compatibility, HAL plugin paths, and OpenGL backend selection automatically.
 
-> **Requirements**: Ubuntu 22.04+ · GCC 13+ · Qt 6 · OpenCV 4. See [wiki/compile.md](wiki/compile.md) for details.
+> **Requirements**: Ubuntu 26.04 · GCC 15 · Qt 6 · OpenCV 4 — the tested environment (see [wiki/compile.md](wiki/compile.md)).
 
 ### Live inivation DAVIS / DVXplorer cameras (optional, preliminary)
 

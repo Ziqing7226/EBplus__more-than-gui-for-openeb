@@ -57,7 +57,7 @@ cmake --build build -- -j$(nproc)
 
 启动脚本会自动处理 Wayland 兼容、HAL 插件路径和 OpenGL 后端选择。
 
-> **环境要求**：Ubuntu 22.04+ · GCC 13+ · Qt 6 · OpenCV 4。详见 [wiki/compile.md](wiki/compile.md)。
+> **环境要求**：Ubuntu 26.04 · GCC 15 · Qt 6 · OpenCV 4——即本项目的实测构建环境（详见 [wiki/compile.md](wiki/compile.md)）。
 
 ### 连接 inivation DAVIS / DVXplorer 相机（可选，初步支持）
 

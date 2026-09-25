@@ -19,7 +19,7 @@ EB plus gives you a complete desktop workflow for event-camera data: real-time v
 
 ## At a Glance
 
-- **Platform**: Linux (Ubuntu 22.04+), Qt 6, OpenCV 4, C++17
+- **Platform**: Linux (built and tested on Ubuntu 26.04), Qt 6, OpenCV 4, C++17
 - **Cameras**: Prophesee / CenturyArks event cameras via openEB HAL, plus **inivation DAVIS346/640, DAVIS240A/B/C, CDAVIS and DVXplorer** over USB (libusb, optional)
 - **Display**: OpenGL 3.3 core, 7 frame modes, 4 palettes, 60+ FPS
 - **Algorithms**: 25 registered (filtering, motion, detection, tracking, reconstruction, analytics, visualization) + the Intrinsic Wizard calibration tool
